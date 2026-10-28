@@ -1,0 +1,386 @@
+{
+  "uid": "fc-fleet-overview",
+  "title": "FleetController — Fleet Overview",
+  "description": "Stage 0 acceptance dashboard. Series colour is pinned per vehicle via byName overrides rather than Grafana's index-ordered classic palette, so changing the Vehicle filter never repaints the surviving series. The filter caps at 8 vehicles on purpose: past 8, categorical hue stops carrying identity — facet into small multiples or aggregate instead of cycling colours.",
+  "tags": ["fleetcontroller", "stage-0"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "5s",
+  "style": "dark",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "vehicle",
+        "label": "Vehicle",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "fc-timescale" },
+        "query": "SELECT vehicle_id FROM vehicles WHERE vehicle_id IN (SELECT DISTINCT vehicle_id FROM readings WHERE ts > now() - INTERVAL '1 hour') ORDER BY vehicle_id",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": false,
+        "sort": 1,
+        "current": {
+          "text": ["sim-car-01", "sim-car-02", "sim-car-03"],
+          "value": ["sim-car-01", "sim-car-02", "sim-car-03"]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Ingest rate",
+      "description": "Readings per minute reaching TimescaleDB. At 3 cars × 10 PIDs × 1 Hz this should sit near 1800.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "text" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*)::float / 5.0 AS \"readings/min\"\nFROM readings\nWHERE ts > now() - INTERVAL '5 minutes';"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Vehicles reporting",
+      "description": "Distinct vehicles seen in the last 2 minutes. A gap here means a sim is down or buffering.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": { "mode": "fixed", "fixedColor": "text" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT vehicle_id) AS \"vehicles\"\nFROM readings\nWHERE ts > now() - INTERVAL '2 minutes';"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Open alerts",
+      "description": "Unresolved alerts across the fleet. Colour here is the reserved status palette, not a series colour, and always travels with this title as its label.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#0ca30c", "value": null },
+              { "color": "#fab219", "value": 1 },
+              { "color": "#d03b3b", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"open\"\nFROM alerts\nWHERE closed_at IS NULL;"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Fleet distance today",
+      "description": "Sum of completed trip distance since midnight. Populated by the SQL rollup, so it lags live readings by up to 60 s.",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "lengthkm",
+          "decimals": 1,
+          "color": { "mode": "fixed", "fixedColor": "text" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT coalesce(sum(distance_km), 0) AS \"km\"\nFROM trips\nWHERE started_at > date_trunc('day', now());"
+        }
+      ]
+    },
+
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Vehicle speed",
+      "description": "PID 0x0D. Trip distance is the integral of this series.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "velocitykmh",
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": false,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "gradientMode": "none"
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "sim-car-01" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-02" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-03" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-04" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-05" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-06" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-07" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-08" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", vehicle_id AS metric, value\nFROM readings\nWHERE readings.metric = 'speed'\n  AND vehicle_id IN (${vehicle:sqlstring})\n  AND $__timeFilter(ts)\nORDER BY 1;"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Coolant temperature",
+      "description": "PID 0x05. Dashed bands mark the alert thresholds: 110 °C sustained for 30 s opens a warning, 120 °C opens a critical immediately. Normal operating range is 90–105 °C.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": false,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "gradientMode": "none",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "#fab219", "value": 110 },
+              { "color": "#d03b3b", "value": 120 }
+            ]
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "sim-car-01" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-02" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-03" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-04" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-05" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-06" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-07" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-08" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", vehicle_id AS metric, value\nFROM readings\nWHERE readings.metric = 'coolant_temp'\n  AND vehicle_id IN (${vehicle:sqlstring})\n  AND $__timeFilter(ts)\nORDER BY 1;"
+        }
+      ]
+    },
+
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Control module voltage",
+      "description": "PID 0x42. Healthy: ~12.6 V at rest, 13.5–14.7 V with the engine running. Below 13.0 V while running means the charging system, not the battery.",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "decimals": 2,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "pointSize": 8,
+            "spanNulls": false,
+            "lineInterpolation": "smooth",
+            "axisBorderShow": false,
+            "gradientMode": "none",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#d03b3b", "value": null },
+              { "color": "transparent", "value": 12.2 }
+            ]
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "sim-car-01" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-02" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-03" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-04" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-05" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-06" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-07" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-08" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT ts AS \"time\", vehicle_id AS metric, value\nFROM readings\nWHERE readings.metric = 'module_voltage'\n  AND vehicle_id IN (${vehicle:sqlstring})\n  AND $__timeFilter(ts)\nORDER BY 1;"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Open alerts",
+      "description": "Every unresolved alert, fleet-wide — deliberately not filtered by the Vehicle variable. Severity is spelled out as text, so the status colour is never the only cue.",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "postgres", "uid": "fc-timescale" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" } }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Severity" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": {
+                      "warn":     { "text": "warn",     "color": "#fab219", "index": 0 },
+                      "critical": { "text": "critical", "color": "#d03b3b", "index": 1 }
+                  }}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Opened", "desc": true }]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "postgres", "uid": "fc-timescale" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT opened_at AS \"Opened\",\n       vehicle_id AS \"Vehicle\",\n       kind       AS \"Alert\",\n       severity   AS \"Severity\",\n       CASE WHEN acked_at IS NULL THEN 'no' ELSE 'yes' END AS \"Acked\",\n       detail::text AS \"Detail\"\nFROM alerts\nWHERE closed_at IS NULL\nORDER BY opened_at DESC\nLIMIT 50;"
+        }
+      ]
+    }
+  ]
+}

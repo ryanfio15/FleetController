@@ -1,0 +1,28 @@
+# secrets & generated material
+.env
+tools/certs/out/
+*.pem
+*.key
+*.crt
+*.csr
+*.srl
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# local state
+data/
+*.log
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

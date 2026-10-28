@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: TimescaleDB
+    type: postgres
+    uid: fc-timescale
+    url: timescaledb:5432
+    user: ${FC_DB_USER}
+    isDefault: true
+    jsonData:
+      database: ${FC_DB_NAME}
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    secureJsonData:
+      password: ${FC_DB_PASSWORD}
+    # Stage 0 reuses the application role. P3 splits out a read-only grafana
+    # role — required anyway, since RLS is bypassed by the table owner
+    # (TECHNICAL_PLAN §5.3).

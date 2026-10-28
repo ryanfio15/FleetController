@@ -1,0 +1,151 @@
+# FleetController — Stage 0.  docs/TECHNICAL_PLAN.md §3
+#
+# Everything the pipeline needs on one laptop. mTLS (Envoy), Keycloak and the
+# Fleet API arrive in P2/P3; this file deliberately stops at the point where a
+# reading travels sim -> ingest -> NATS -> processor -> TimescaleDB -> Grafana.
+#
+# Run from the repository root:  ./fc.sh up
+
+name: fleetcontroller
+
+x-build: &repo-root
+  context: ../..
+
+services:
+  # ------------------------------------------------------------- data tier --
+  timescaledb:
+    image: timescale/timescaledb:2.17.2-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: ["5432:5432"]          # exposed so you can psql from the host
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: timescale/timescaledb:2.17.2-pg16
+    depends_on:
+      timescaledb: {condition: service_healthy}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ../../db/migrations:/migrations:ro
+      - ../../db/migrate.sh:/migrate.sh:ro
+    entrypoint: ["sh", "/migrate.sh"]
+    restart: "no"
+
+  nats:
+    image: nats:2.10-alpine
+    # 8222 is the monitoring endpoint KEDA will scrape for consumer lag in
+    # Stage 2. Exposed here so the same lag number is visible locally.
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["4222:4222", "8222:8222"]
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------- ingest --
+  ingest:
+    build:
+      <<: *repo-root
+      dockerfile: services/ingest-api/Dockerfile
+    depends_on:
+      nats: {condition: service_healthy}
+    environment:
+      INGEST_NATS_URL: nats://nats:4222
+      # Stage 0 only. There is no Envoy sidecar yet, so the API must listen on
+      # all interfaces and trust the body's vehicle_id. P2 reverts both of
+      # these to the secure defaults baked into settings.py.
+      INGEST_HOST: 0.0.0.0
+      INGEST_ALLOW_INSECURE_IDENTITY: ${INGEST_ALLOW_INSECURE_IDENTITY:-true}
+      INGEST_MAX_READINGS_PER_BATCH: ${INGEST_MAX_READINGS_PER_BATCH:-500}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ------------------------------------------------------------- processor --
+  processor:
+    build:
+      <<: *repo-root
+      dockerfile: services/stream-processor/Dockerfile
+    depends_on:
+      nats: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    environment:
+      PROCESSOR_NATS_URL: nats://nats:4222
+      PROCESSOR_DB_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@timescaledb:5432/${POSTGRES_DB}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Ephemeral host port, not a fixed one: this deployment is the KEDA scaling
+    # target, so it has to be scalable locally too. Find a replica's metrics
+    # with `docker compose port --index 2 processor 9100`.
+    ports: ["9100"]
+    # Scale past 1 to prove the stateless design holds:
+    #   ./fc.sh scale-processor 3
+    # Replicas share one durable pull consumer, so each message is still
+    # processed exactly once (§6.2).
+
+  # ------------------------------------------------------------------ sims --
+  vehicle-sim:
+    build:
+      <<: *repo-root
+      dockerfile: services/vehicle-sim/Dockerfile
+    depends_on:
+      ingest: {condition: service_healthy}
+    environment:
+      SIM_INGEST_URL: http://ingest:8080/v1/telemetry
+      SIM_SAMPLE_HZ: ${SIM_SAMPLE_HZ:-1}
+      SIM_BATCH_SECONDS: ${SIM_BATCH_SECONDS:-10}
+      SIM_FAULT: ${SIM_FAULT:-none}
+      SIM_IDENTITY_DIR: /identity
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # Scaled replicas are identical and get hex hostnames, so each sim claims
+      # an ordinal here with an O_EXCL create. Stands in for the StatefulSet
+      # ordinals / per-vehicle cert volumes that Stage 2 uses.
+      - sim-identity:/identity
+    deploy:
+      # "the fleet grows from 3 to 50 cars by changing one number"
+      replicas: ${SIM_COUNT:-3}
+
+  # --------------------------------------------------------------- grafana --
+  grafana:
+    image: grafana/grafana:11.4.0
+    depends_on:
+      timescaledb: {condition: service_healthy}
+    environment:
+      # Anonymous viewing so the Stage 0 exit criterion — a reading on a panel
+      # with no manual steps after `up` — is literally true.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_USERS_DEFAULT_THEME: dark
+      FC_DB_USER: ${POSTGRES_USER}
+      FC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      FC_DB_NAME: ${POSTGRES_DB}
+    ports: ["${GRAFANA_PORT:-3000}:3000"]
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+volumes:
+  timescale-data:
+  nats-data:
+  sim-identity:
