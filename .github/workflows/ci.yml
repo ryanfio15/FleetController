@@ -1,0 +1,120 @@
+# CI.  docs/TECHNICAL_PLAN.md §8.2
+#
+# Keep this under ten minutes or you will stop waiting for it.
+#
+# Two jobs. `test` runs on everything. `images` only publishes from main and
+# tags, because a container registry full of one image per feature-branch push
+# is a registry nobody reads.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*", "stage-*"]
+  pull_request:
+
+# Superseded runs on the same ref are pointless once a newer commit exists.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # matches the service Dockerfiles
+          cache: pip
+
+      - name: Install
+        # fc_common brings pydantic and pydantic-settings with it. The unit
+        # tests deliberately need nothing else: the sim's identity and
+        # credential logic lives in app/identity.py precisely so it is testable
+        # without httpx or prometheus-client.
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./libs/fc_common pytest
+
+      - name: Unit tests
+        run: python -m pytest tests/ -v
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render both overlays
+        # Catches the whole class of mistake that only shows up at build time:
+        # a patch that matches nothing, a missing file, a duplicate resource ID.
+        # The kind overlay needs its gitignored secret.env to exist, so CI
+        # supplies the example — the values are irrelevant to a render.
+        run: |
+          cp deploy/k8s/overlays/kind/secret.env.example \
+             deploy/k8s/overlays/kind/secret.env
+          for overlay in kind fabric; do
+            echo "::group::$overlay"
+            kubectl kustomize --load-restrictor LoadRestrictionsNone \
+              "deploy/k8s/overlays/$overlay"
+            echo "::endgroup::"
+          done
+
+      - name: Validate the Envoy config with Envoy
+        # A YAML parse proves nothing here. `--mode validate` loads the config
+        # the way the real proxy does, which is how the misplaced
+        # transport_socket in the first draft of this file was found.
+        run: |
+          ./tools/certs/make-ca.sh 1
+          docker run --rm \
+            -v "$PWD/deploy/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro" \
+            -v "$PWD/tools/certs/out/ingest-server.crt:/etc/envoy/tls/tls.crt:ro" \
+            -v "$PWD/tools/certs/out/ingest-server.key:/etc/envoy/tls/tls.key:ro" \
+            -v "$PWD/tools/certs/out/ca.crt:/etc/envoy/tls/ca.crt:ro" \
+            envoyproxy/envoy:v1.32-latest --mode validate -c /etc/envoy/envoy.yaml
+
+  images:
+    needs: [test, manifests]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [ingest-api, stream-processor, vehicle-sim]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/fleetcontroller/${{ matrix.service }}
+          # A SHA tag is what the fabric overlay pins to: a rollback becomes a
+          # one-word edit, and `kubectl describe` says what is actually running
+          # rather than what `dev` meant that day.
+          tags: |
+            type=sha,format=long
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          # The repository root, because every Dockerfile copies libs/fc_common
+          # in. Building from the service directory cannot work.
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
