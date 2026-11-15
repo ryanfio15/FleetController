@@ -15,6 +15,9 @@ deploy/k8s/overlays/*/secret.env
 # fetched cluster kubeconfigs
 deploy/fabric/kubeconfig*
 
+# fablib virtualenv (it pins a large dependency tree)
+.venv-fabric/
+
 # python
 __pycache__/
 *.py[cod]

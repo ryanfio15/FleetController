@@ -219,8 +219,20 @@ SQL
 
   k8s-apply)
     if [[ "$K8S_OVERLAY" == "fabric" ]]; then
-        # Targets kube-system, so it cannot live in the namespaced overlay.
-        kubectl apply -f "$ROOT/deploy/k8s/overlays/fabric/ingress-nginx-nodeport.yaml"
+        # The fabric overlay carries EDGE1_ADDR and NODE_CIDR placeholders that
+        # only the live slice can fill in. Applying it from here would either
+        # fail on an invalid IP or -- worse, if someone had hand-edited stale
+        # values in -- deploy a cluster whose server certificate does not cover
+        # the address its devices dial. fleetctl.py reads both back from the
+        # slice, so it is the only thing that should apply this overlay.
+        echo "The fabric overlay is applied by deploy/fabric/fleetctl.py, which" >&2
+        echo "substitutes the slice's real addresses:" >&2
+        echo >&2
+        echo "    python deploy/fabric/fleetctl.py up --only app" >&2
+        echo >&2
+        echo "Read-only commands (k8s-status, k8s-verify, k8s-psql, k8s-logs," >&2
+        echo "k8s-scale) work against FABRIC with KUBECONFIG set." >&2
+        exit 2
     fi
     # A Job's spec is immutable. Once a migration is added the generated
     # ConfigMap's name hash moves, the Job's volume reference changes, and the

@@ -1,0 +1,12 @@
+# fablib, for deploy/fabric/fleetctl.py.
+#
+# Install into a virtualenv rather than system Python: fablib pulls in a large
+# dependency tree and pins several of them tightly.
+#
+#   python -m venv .venv-fabric
+#   source .venv-fabric/Scripts/activate     # Git Bash on Windows
+#   pip install -r deploy/fabric/requirements.txt
+#
+# fablib supports a narrower Python range than the latest release. If the
+# install fails, build the virtualenv with 3.11 or 3.12.
+fabrictestbed-extensions>=1.7,<2

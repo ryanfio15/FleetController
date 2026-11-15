@@ -1,15 +1,25 @@
-# Site-specific values — the ONLY file to edit per FABRIC slice.
+# Site-specific values. A template — normally you do not edit this.
 #
-# Three placeholders, all of which come from the slice once it exists:
+# Two placeholders:
 #
 #   EDGE1_ADDR   edge-1's FABNetv4 address
 #   NODE_CIDR    the slice's FABNetv4 subnet, e.g. 10.132.4.0/24
 #
-# They are left as obviously-invalid strings on purpose. An unfilled placeholder
-# fails at `kubectl apply` with a validation error naming the field, rather than
-# deploying something that looks healthy and quietly cannot connect.
+# `deploy/fabric/fleetctl.py` reads both back from the live slice and
+# substitutes them into the rendered output, so this file stays a committed
+# template and the values come from the thing they describe.
 #
-# Find them with:  grep -n 'EDGE1_ADDR\|NODE_CIDR' site.yaml
+# That is deliberate rather than convenient. Typing edge-1's address by hand is
+# how you get a cluster where every pod is Running, every probe is green, and
+# every TLS handshake fails — because the address the sims dial is not in the
+# server certificate's SANs below. Discovering it removes the chance to get it
+# wrong.
+#
+# If you do apply this overlay by hand, the placeholders are invalid on purpose:
+# `kubectl apply` fails naming the field rather than deploying something that
+# looks healthy and quietly cannot connect. Find them with:
+#
+#   grep -n 'EDGE1_ADDR\|NODE_CIDR' site.yaml
 
 # ---------------------------------------------------------------------------
 # 1. The sims connect to ingest over the node network, as the PDF requires

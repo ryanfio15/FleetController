@@ -101,6 +101,7 @@ deploy/envoy/            mTLS proxy config — one copy, used by Compose and Kub
 deploy/grafana/          datasource + dashboards, provisioned from files
 deploy/k8s/              kustomize base + kind and fabric overlays
 deploy/kind/             local cluster definition for the Stage 2 rehearsal
+deploy/fabric/           one script: FABRIC slice → RKE2 → deployed
 tools/certs/             local CA for the Compose path
 tests/unit/              contract and identity tests
 ```
@@ -115,6 +116,20 @@ cp deploy/k8s/overlays/kind/secret.env.example deploy/k8s/overlays/kind/secret.e
 
 Needs `kind`, `helm` and `kubectl`. Details and the list of things that fail
 confusingly are in [`deploy/k8s/README.md`](deploy/k8s/README.md).
+
+## FABRIC
+
+The 5-node RKE2 cluster is provisioned and deployed to by one script:
+
+```bash
+python deploy/fabric/fleetctl.py check    # read-only; creates nothing
+python deploy/fabric/fleetctl.py up       # slice → RKE2 → deps → app
+```
+
+It creates the slice, assigns FABNetv4 addresses, installs the RKE2 server and
+four tier-labelled agents, fetches the kubeconfig, and applies the overlay with
+the site's real addresses substituted in. Setup and caveats:
+[`deploy/fabric/README.md`](deploy/fabric/README.md).
 
 ## Design notes worth knowing before you change things
 

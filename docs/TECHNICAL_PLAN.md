@@ -791,7 +791,24 @@ the G1 claim at the full replica count rather than Stage 0's three; NetworkPolic
 genuinely enforced by kindnetd; and Grafana answering through ingress-nginx on
 30080.
 
-Still outstanding for Stage 3: everything in §10 that needs a FABRIC slice.
+Still outstanding for Stage 3: a FABRIC slice to run it on.
+`deploy/fabric/fleetctl.py` provisions one and deploys onto it in a single
+command — slice, FABNetv4 addressing, RKE2 server plus four labelled agents,
+cert-manager/csi-driver/KEDA, and the overlay. Two things about it are design
+decisions rather than conveniences:
+
+- **It discovers `EDGE1_ADDR` and `NODE_CIDR` from the live slice** rather than
+  having them typed into `site.yaml`. Typing edge-1's address by hand is how you
+  get a cluster where every pod is Running, every probe is green, and every TLS
+  handshake fails, because the address the sims dial is not in the server
+  certificate's SANs. `./fc.sh k8s-apply` therefore *refuses* the fabric overlay.
+- **It is a script, not a notebook**, because slice leases expire and this will
+  be run more than once. `up` is idempotent: it reuses a slice, skips RKE2 where
+  it is installed, and re-applies the manifests.
+
+It has not been run against the real testbed, so the `check` subcommand talks to
+FABRIC read-only and creates nothing — a wrong fablib call surfaces there for
+free rather than halfway through a slice submission.
 
 ## 16. Next: P2 under Compose
 
