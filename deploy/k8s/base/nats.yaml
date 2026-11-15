@@ -71,6 +71,10 @@ spec:
       labels:
         app.kubernetes.io/name: nats
     spec:
+      # Legacy Docker-link service variables off: they collide with this
+      # project's SERVICE_-prefixed configuration. See ingest.yaml for the
+      # failure they caused.
+      enableServiceLinks: false
       containers:
         - name: nats
           image: nats:2.10-alpine

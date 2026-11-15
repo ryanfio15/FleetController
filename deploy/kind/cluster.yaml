@@ -15,14 +15,15 @@ apiVersion: kind.x-k8s.io/v1alpha4
 # ---------------------------------------------------------------------------
 # NetworkPolicy enforcement
 #
-# Check this before trusting any of deploy/k8s/base/networkpolicy.yaml: if the
-# bundled CNI does not implement NetworkPolicy, every policy silently passes and
-# the rehearsal proves nothing. Confirm with the break/fix test in the
-# verification steps — delete the processor's egress allowance and watch writes
-# actually stop.
+# Verified on kind v0.33.0 / k8s v1.37: kindnetd *does* enforce NetworkPolicy.
+# Probed from a sim pod, whose policy allows egress to ingest:8443 and nothing
+# else — ingest:8443 connected, timescaledb:5432 and nats:4222 both timed out.
+# Worth re-checking after a kind upgrade, because if the CNI ever stops
+# enforcing, every policy in base/networkpolicy.yaml silently passes and the
+# rehearsal proves nothing.
 #
-# If it does not enforce, uncomment the next two lines and install Calico. RKE2's
-# default Canal does enforce them, so this is a kind-only concern.
+# If a future version does not enforce, uncomment the two lines below and
+# install Calico. RKE2's default Canal enforces them, so this is kind-only.
 #
 # networking:
 #   disableDefaultCNI: true

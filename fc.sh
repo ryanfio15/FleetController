@@ -274,12 +274,27 @@ SQL
     n="${1:?usage: ./fc.sh k8s-scale N}"
     # Still one number. Pod names are the vehicle IDs, so this adds sim-car-3,
     # sim-car-4, ... each with its own certificate.
+    #
+    # Imperative, and therefore temporary: the overlay declares replicas, so the
+    # next k8s-apply scales the fleet straight back to that number. For a fleet
+    # size that survives an apply, edit `replicas` in the overlay instead —
+    # which is where "the fleet grows by changing one number" actually lives.
     k scale statefulset/sim-car --replicas="$n"
+    echo "Running $n simulated vehicles (until the next k8s-apply)."
     ;;
 
   k8s-psql)
-    k exec -it statefulset/timescaledb -c timescaledb -- sh -c \
-        'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+    # A TTY only when dropping into the shell. `k8s-psql -c "SELECT ..."` is
+    # non-interactive, and asking for a TTY there fails with "Unable to use a
+    # TTY" instead of running the query.
+    if [[ $# -eq 0 ]]; then
+        k exec -it statefulset/timescaledb -c timescaledb -- sh -c \
+            'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+    else
+        k exec -i statefulset/timescaledb -c timescaledb -- sh -c \
+            'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' \
+            sh "$@"
+    fi
     ;;
 
   k8s-logs)

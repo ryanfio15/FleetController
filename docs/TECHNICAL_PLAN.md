@@ -766,23 +766,54 @@ duplicate rows with three processor replicas on one durable consumer** (the G1
 claim), and a 60-second NATS outage that produced 503s with `Retry-After`,
 sim-side buffering, and a complete backfill on recovery.
 
-## 15. Next: P2, mTLS
+## 15. Stage 2 result (kind)
 
-Stage 0 is done (§14) — tag it before starting, so there is a known-good commit to
-bisect back to. P2 adds transport security to a data path that already works, which
-is the whole reason it was deferred:
+The manifests run on `kind` and the Stage 0 exit criterion still holds through
+mTLS and NodePort: **1740 readings/min, 2.2 s behind**. What the build changed
+about the plan, again all of it found by running the thing:
 
-1. `./fc.sh certs 3` — the CA script is already written and produces the chain shape
-   cert-manager will issue later.
-2. Add the Envoy sidecar to the ingest service in Compose, with
-   `require_client_certificate: true` and `forward_client_cert_details: SANITIZE_SET`.
-   One `deploy/envoy/envoy.yaml`, later mounted as a ConfigMap — never two copies.
-3. Flip `INGEST_ALLOW_INSECURE_IDENTITY=false` and `INGEST_HOST=127.0.0.1`.
-   `app/identity.py` already parses XFCC and already returns 403 on a CN/body
-   mismatch, both covered by tests — the switch should be a configuration change,
-   not a code change.
-4. Mount per-vehicle certs into the sims, replacing the shared-volume ordinal claim.
-5. Add the negative tests from §8.1 that cannot exist until now: no cert, foreign CA,
-   revoked cert. Assert the TLS handshake **fails** — a test that only checks for a
-   non-200 would pass against a broken listener.
+| Finding | Consequence |
+|---|---|
+| A StatefulSet has one pod template too, so "mount Secret *n* into pod *n*" is no more expressible than it was for a Deployment | §G7 was only half a fix. cert-manager-csi-driver templates each pod's CN from `${POD_NAME}`, which is what forced vehicle IDs to equal pod names exactly (§10) |
+| Kubernetes injects `INGEST_PORT=tcp://10.96.x.x:8443` for the Service named `ingest` | It collides with this project's own `INGEST_`-prefixed config and uvicorn exits. `enableServiceLinks: false` on every pod. A project whose config convention is "one env prefix per service, named after the service" is maximally exposed to this |
+| httpx 0.28's `cert=` and `verify=<str>` do not compose — the client certificate is silently dropped | Build the `SSLContext` explicitly. The failure mode is a sim that logs `mtls: true`, has a valid cert mounted, and fails the handshake with an **empty** error string |
+| `kubectl apply -k` cannot read the shared files | Kustomize refuses paths above its root and `apply -k` has no `--load-restrictor`. Render and pipe to `apply -f -`, or keep a second copy of every shared file — which §4 rule 1 exists to prevent |
+| NetworkPolicy filters only *new* connections | Deleting an allowance left the processor's psycopg pool writing happily. A break/fix test without a pod restart proves nothing |
+| Steady-state consumer lag at 50 cars is ~40, not 500 | `lagThreshold: 500` never fires at steady state, so the 1→6 claim is only demonstrable against a real backlog. The threshold is right; the demo was wrong |
+
+Verified against the running cluster: the full contract matrix (202/400/403/413)
+with the no-certificate case failing at the **handshake** rather than returning a
+status; whole-batch rejection writing zero rows; 50 pods holding 50 distinct
+certificate CNs each equal to its own pod name; **KEDA scaling 1 → 3 → 4 → 5 → 6**
+and draining ~600k backlogged messages to zero lag in about 60 s; **zero duplicate
+rows across 246,982 rows from 50 vehicles** after that six-replica drain, which is
+the G1 claim at the full replica count rather than Stage 0's three; NetworkPolicy
+genuinely enforced by kindnetd; and Grafana answering through ingress-nginx on
+30080.
+
+Still outstanding for Stage 3: everything in §10 that needs a FABRIC slice.
+
+## 16. Next: P2 under Compose
+
+Stage 2 took mTLS directly to Kubernetes, so the Compose stack is now the
+environment *behind* on security — it still runs plain HTTP with
+`INGEST_ALLOW_INSECURE_IDENTITY=true`. `deploy/envoy/envoy.yaml` is written and
+validated, and the sim already presents a certificate whenever one is configured,
+so catching Compose up is wiring, not design:
+
+1. `./fc.sh certs 3` — already produces unpadded CNs matching the cluster's.
+2. Add the Envoy sidecar to the ingest service in Compose against the existing
+   `deploy/envoy/envoy.yaml`. The TLS paths in it are cert-manager's names, so the
+   bind mounts map `make-ca.sh`'s output onto `tls.crt` / `tls.key` / `ca.crt`
+   rather than growing a second set of paths.
+3. Flip `INGEST_ALLOW_INSECURE_IDENTITY=false` and `INGEST_HOST=127.0.0.1` in the
+   Compose env — a configuration change, not a code change, which the cluster has
+   now demonstrated.
+4. Mount per-vehicle certs into the sims and set `SIM_TLS_*`, replacing the
+   shared-volume ordinal claim. The sim code needs nothing new.
+5. Port the §8.1 negative tests down from the cluster, where they now pass, and
+   add the one FABRIC cannot easily do: a **foreign CA**. Assert the handshake
+   fails rather than merely returning a non-200.
 6. Wire the revocation denylist: `revoked_at` in `vehicles`, cached 60 s in ingest.
+   This is the last unimplemented piece of §7.2, and it is independent of
+   environment.

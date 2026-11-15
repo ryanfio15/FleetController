@@ -44,6 +44,10 @@ spec:
       labels:
         app.kubernetes.io/name: timescaledb
     spec:
+      # Legacy Docker-link service variables off: they collide with this
+      # project's SERVICE_-prefixed configuration. See ingest.yaml for the
+      # failure they caused.
+      enableServiceLinks: false
       securityContext:
         # postgres is uid 70 in this Alpine-based image, not the 999 of the
         # Debian ones. The entrypoint starts as root and drops privileges

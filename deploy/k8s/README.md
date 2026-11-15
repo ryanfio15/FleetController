@@ -73,10 +73,24 @@ second replica on a node would simply stay Pending.
 **Never add an HPA to the processor.** KEDA creates and owns one. Two
 autoscalers on one target flap.
 
-**Check that your CNI enforces NetworkPolicy.** If it does not, every policy in
-`base/networkpolicy.yaml` silently passes and proves nothing. The break/fix step
-below is how you find out. RKE2's Canal enforces them; kind's default may not —
-see `deploy/kind/cluster.yaml`.
+**NetworkPolicy only filters *new* connections.** Deleting an allowance does not
+sever established ones — conntrack keeps them, so the processor's psycopg pool
+goes on writing happily for as long as the pod lives. A break/fix test that only
+deletes a policy therefore "proves" enforcement works when nothing was tested.
+Restart the workload after changing the policy, which is what the step below
+does.
+
+**`k8s-apply` reverts `k8s-scale`.** The overlay declares the sim replica count,
+so an apply scales the fleet back to it. For a fleet size that survives, edit
+`replicas` in the overlay — that is where "the fleet grows by changing one
+number" actually lives.
+
+**Steady-state lag at 50 cars is ~40 pending, not 500.** The processor is
+comfortably faster than the fleet, so `lagThreshold: 500` never fires at steady
+state and KEDA sits at one replica. That is the system working, not a
+misconfiguration — but it means the 1→6 scaling claim can only be demonstrated
+against a genuine backlog, as below. Do not "fix" it by tuning the threshold
+down to the demo.
 
 **cert-manager Issuers here are namespaced, not ClusterIssuers.** A ClusterIssuer
 reads its CA keypair from cert-manager's own namespace, not from `fleet`, and the
@@ -84,7 +98,22 @@ mismatch reports a missing Secret you can plainly see.
 
 ## Verification
 
-Beyond `k8s-verify`, the things worth proving on kind before FABRIC:
+All of the following were run on kind (k8s v1.37) and passed. Beyond
+`k8s-verify`:
+
+| Claim | Result |
+|---|---|
+| End-to-end through mTLS and NodePort | 1740 readings/min, 3 cars, **2.2s behind** — inside the 5s SLO |
+| Contract matrix on-cluster | 202 · 403 (CN≠body) · 413 (501 readings) · 400 (out of range) all correct |
+| No client cert | fails at the **TLS handshake**, not with an HTTP status |
+| Bad reading rejects the whole batch | **zero** rows written for the 400 |
+| Per-pod certificates | 50 pods, 50 distinct CNs, each equal to its pod name |
+| KEDA 1→6 under a real backlog | scaled **1 → 3 → 4 → 5 → 6**, drained ~600k messages to zero lag in ~60s |
+| The §6.3 no-duplicates claim, at 6 replicas | **0 duplicate groups** across 246,982 rows from 50 vehicles |
+| NetworkPolicy actually enforced | allowed path connects; denied paths time out |
+| Grafana through ingress-nginx :30080 | HTTP 200, `database: ok` |
+
+The commands:
 
 ```bash
 # Negative mTLS — these must fail at the handshake, not merely return non-200.
@@ -95,19 +124,24 @@ curl -sv --cert foreign.crt --key foreign.key \
 # Valid cert, mismatched body: 403 (never trust the body's vehicle_id)
 # 501 readings: 413.  One reading at coolant_temp=9999: 400, zero rows written.
 
-# KEDA scales the processor past one replica under load
+# KEDA 1->6. Steady state will not do it (lag sits near 40), so this blocks the
+# processor's path to the database to build a genuine backlog. Note the restart:
+# without it the existing connection pool survives the policy change and
+# nothing happens at all.
 ./fc.sh k8s-scale 50
-kubectl -n fleet get scaledobject,hpa -w
-
-# The §6.3 claim, re-proven on-cluster: no duplicate rows at N replicas
-./fc.sh k8s-psql -c "SELECT vehicle_id, metric, ts, count(*) FROM readings \
-  GROUP BY 1,2,3 HAVING count(*) > 1 LIMIT 5;"
-
-# NetworkPolicy break/fix — delete the processor's egress allowance to the
-# database and confirm writes actually stop, then restore it.
 kubectl -n fleet delete networkpolicy processor
-./fc.sh k8s-verify          # seconds_behind should climb
-./fc.sh k8s-apply           # restored
+kubectl -n fleet rollout restart deploy/processor
+kubectl -n fleet get hpa keda-hpa-processor -w     # lag climbs past 500, replicas 1->6
+
+./fc.sh k8s-apply                                  # policy restored; lag drains to 0
+
+# The §6.3 claim, now at six replicas draining a backlog: still zero duplicates
+./fc.sh k8s-psql -c "SELECT count(*) FROM (SELECT vehicle_id, metric, ts FROM \
+  readings GROUP BY 1,2,3 HAVING count(*) > 1) d;"
+
+# That same sequence is also the NetworkPolicy break/fix test and the §8.2
+# chaos case 'kill the database path': lag grows, nothing is lost, and the
+# backlog drains on recovery.
 
 # PDB: drain a node, ingest stays up
 kubectl drain fleet-worker --ignore-daemonsets --delete-emptydir-data

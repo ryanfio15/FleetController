@@ -24,6 +24,10 @@ spec:
       labels:
         app.kubernetes.io/name: processor
     spec:
+      # Legacy Docker-link service variables off: they collide with this
+      # project's SERVICE_-prefixed configuration. See ingest.yaml for the
+      # failure they caused.
+      enableServiceLinks: false
       containers:
         - name: processor
           image: ghcr.io/ryanfio15/fleetcontroller/stream-processor:dev

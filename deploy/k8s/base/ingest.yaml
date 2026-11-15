@@ -66,6 +66,26 @@ spec:
       labels:
         app.kubernetes.io/name: ingest
     spec:
+      # ---------------------------------------------------------------------
+      # Not optional, and the reason is worth the paragraph.
+      #
+      # Kubernetes injects a legacy Docker-link environment variable for every
+      # Service in the namespace: SVCNAME_PORT, SVCNAME_SERVICE_HOST, and so on.
+      # The Service in front of this pod is called `ingest`, so it injects
+      #
+      #     INGEST_PORT=tcp://10.96.197.194:8443
+      #
+      # which is exactly the variable this service reads its own listen port
+      # from. uvicorn then exits with "Invalid value for '--port'" and the pod
+      # CrashLoopBackOffs, while Envoy beside it stays happily Ready.
+      #
+      # This project is unusually exposed to that collision by design: §4 rule 2
+      # says all configuration arrives as environment variables under one prefix
+      # per service, and that prefix is the service name. Turning the legacy
+      # links off removes the whole class of conflict rather than one instance
+      # of it. Nothing here uses them — service discovery is DNS.
+      # ---------------------------------------------------------------------
+      enableServiceLinks: false
       containers:
         # ------------------------------------------------------------ envoy --
         - name: envoy
@@ -119,6 +139,11 @@ spec:
             # other way is the whole difference between the environments.
             - name: INGEST_HOST
               value: 127.0.0.1
+            # Belt and braces against the service-link collision described
+            # above: an explicit entry wins over an injected one, so this holds
+            # even if someone removes enableServiceLinks.
+            - name: INGEST_PORT
+              value: "8080"
             - name: INGEST_ALLOW_INSECURE_IDENTITY
               value: "false"
             - name: INGEST_MAX_READINGS_PER_BATCH

@@ -51,6 +51,11 @@ spec:
       labels:
         app.kubernetes.io/name: vehicle-sim
     spec:
+      # Legacy Docker-link service variables off: they collide with this
+      # project's SERVICE_-prefixed configuration. The Service in front of these
+      # pods is called `sim-car`, so this is live ammunition here too. See
+      # ingest.yaml for the failure they caused.
+      enableServiceLinks: false
       securityContext:
         # The image's `app` user. The CSI volume below is told the same number,
         # so the mounted key is readable without making it world-readable.

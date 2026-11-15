@@ -14,6 +14,7 @@ import atexit
 import hashlib
 import os
 import socket
+import ssl
 from pathlib import Path
 
 from app.settings import settings
@@ -67,16 +68,26 @@ def tls_kwargs() -> dict:
     An empty SIM_TLS_CERT means plain HTTP, which is how the Compose stack runs
     until Envoy lands there. Nothing here branches on *which* environment this
     is — only on whether a certificate was supplied (plan §4 rule 2).
+
+    The SSLContext is built here rather than letting httpx assemble one from
+    `cert=` and `verify=` paths, because in httpx 0.28 **those two arguments do
+    not compose**. Passing `verify=<str>` takes a deprecated path that builds its
+    own context, and the `cert=` client certificate is quietly discarded. What
+    you get is a sim that logs `mtls: true`, mounts a perfectly good
+    certificate, never sends it, and fails the handshake with Envoy's
+    TLSV13_ALERT_CERTIFICATE_REQUIRED surfacing as an *empty* error string.
+    Every part of that is invisible from the outside, which is why the context
+    is explicit and why test_sim_identity.py asserts the chain is loaded into it.
     """
     if not settings.tls_cert:
         return {}
-    kwargs: dict = {"cert": (settings.tls_cert, settings.tls_key)}
-    if settings.tls_ca:
-        # Verify ingest against the project CA rather than the system trust
-        # store: the server cert is issued by the same CA that signed this
-        # device, and no public root should be able to vouch for it.
-        kwargs["verify"] = settings.tls_ca
-    return kwargs
+
+    # cafile=None falls back to the system trust store, which cannot vouch for
+    # a private CA — so a missing SIM_TLS_CA fails the handshake rather than
+    # trusting the wrong roots.
+    context = ssl.create_default_context(cafile=settings.tls_ca or None)
+    context.load_cert_chain(settings.tls_cert, settings.tls_key)
+    return {"verify": context}
 
 
 def cert_stamp() -> bytes | None:

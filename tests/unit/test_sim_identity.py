@@ -72,16 +72,66 @@ def test_no_certificate_means_plain_http():
     assert sim_identity.cert_stamp() is None
 
 
-def test_certificate_is_presented_and_ca_is_pinned(monkeypatch):
+class _RecordingContext:
+    """Stands in for an ssl.SSLContext so no real keypair is needed here."""
+
+    def __init__(self):
+        self.chain = None
+
+    def load_cert_chain(self, certfile, keyfile):
+        self.chain = (certfile, keyfile)
+
+
+@pytest.fixture
+def recorded(monkeypatch):
+    """Capture what gets built, without needing a PEM on disk."""
+    calls = {}
+
+    def fake_create_default_context(cafile=None):
+        calls["cafile"] = cafile
+        calls["context"] = _RecordingContext()
+        return calls["context"]
+
+    monkeypatch.setattr(
+        sim_identity.ssl, "create_default_context", fake_create_default_context
+    )
+    return calls
+
+
+def test_client_certificate_is_loaded_into_the_context(recorded, monkeypatch):
+    """The regression guard for the bug that cost an afternoon.
+
+    httpx 0.28's `cert=` and `verify=<str>` do not compose: the client
+    certificate is silently dropped. A sim in that state logs mtls: true, has a
+    valid certificate mounted, and still fails the handshake with an empty
+    error message. So the assertion that matters is not the shape of the httpx
+    call — it is that the chain actually reaches the context being handed over.
+    """
     monkeypatch.setattr(settings, "tls_cert", "/tls/tls.crt")
     monkeypatch.setattr(settings, "tls_key", "/tls/tls.key")
     monkeypatch.setattr(settings, "tls_ca", "/tls/ca.crt")
 
     kwargs = sim_identity.tls_kwargs()
-    assert kwargs["cert"] == ("/tls/tls.crt", "/tls/tls.key")
+
+    assert kwargs["verify"] is recorded["context"]
+    assert recorded["context"].chain == ("/tls/tls.crt", "/tls/tls.key")
     # Pinned to the project CA, not the system trust store: no public root
     # should be able to vouch for ingest.
-    assert kwargs["verify"] == "/tls/ca.crt"
+    assert recorded["cafile"] == "/tls/ca.crt"
+    # `cert=` must not be passed at all — that is the argument httpx ignores.
+    assert "cert" not in kwargs
+
+
+def test_absent_ca_does_not_fall_back_to_public_roots(recorded, monkeypatch):
+    # cafile=None means the system trust store, which cannot vouch for a
+    # private CA. Failing the handshake is the correct outcome; quietly
+    # trusting every public root would not be.
+    monkeypatch.setattr(settings, "tls_cert", "/tls/tls.crt")
+    monkeypatch.setattr(settings, "tls_key", "/tls/tls.key")
+    monkeypatch.setattr(settings, "tls_ca", "")
+
+    sim_identity.tls_kwargs()
+    assert recorded["cafile"] is None
 
 
 def test_stamp_changes_when_the_certificate_is_renewed(tmp_path, monkeypatch):
