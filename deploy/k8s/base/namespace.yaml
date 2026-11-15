@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fleet
+  labels:
+    app.kubernetes.io/part-of: fleetcontroller
+    # Lets other namespaces' NetworkPolicies name this one as a peer. Modern
+    # Kubernetes sets kubernetes.io/metadata.name automatically, but the
+    # policies in networkpolicy.yaml select on it, so it is worth being able to
+    # see it declared.
+    name: fleet

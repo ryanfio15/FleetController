@@ -1,0 +1,50 @@
+# kind cluster for the Stage 2 rehearsal.  docs/TECHNICAL_PLAN.md §3, §12
+#
+#   kind create cluster --name fleet --config deploy/kind/cluster.yaml
+#
+# Three nodes, so `kubectl drain` has somewhere to drain to and the PDB on
+# ingest is actually exercised.
+#
+# The port mappings are the point: 30443 and 30080 are reachable on localhost
+# exactly as they will be on a FABRIC node, so the sims and the browser connect
+# the same way in both environments and the NodePort/TLS-passthrough path is
+# rehearsed rather than assumed.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy enforcement
+#
+# Check this before trusting any of deploy/k8s/base/networkpolicy.yaml: if the
+# bundled CNI does not implement NetworkPolicy, every policy silently passes and
+# the rehearsal proves nothing. Confirm with the break/fix test in the
+# verification steps — delete the processor's egress allowance and watch writes
+# actually stop.
+#
+# If it does not enforce, uncomment the next two lines and install Calico. RKE2's
+# default Canal does enforce them, so this is a kind-only concern.
+#
+# networking:
+#   disableDefaultCNI: true
+# ---------------------------------------------------------------------------
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # Ingest. Raw TCP: nothing in this path may terminate TLS, or the client
+      # certificate never reaches Envoy (§10).
+      - containerPort: 30443
+        hostPort: 30443
+        protocol: TCP
+      # ingress-nginx, which on FABRIC is reached through the bastion tunnel.
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP
+  - role: worker
+  - role: worker

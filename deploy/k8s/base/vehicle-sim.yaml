@@ -1,0 +1,129 @@
+# The simulated fleet.  docs/TECHNICAL_PLAN.md §G7, §10
+#
+# A StatefulSet, not the Deployment the PDF lists, and named `sim-car` rather
+# than `vehicle-sim` — because the pod name *is* the vehicle identity:
+#
+#     pod name == hostname == certificate CN == vehicle_id
+#
+# A StatefulSet named `sim-car` produces pods sim-car-0..N-1, which is why the
+# IDs are unpadded. Identity then arrives as a plain fieldRef, and
+# cert-manager-csi-driver issues each pod a certificate whose CN is its own
+# name. Nothing translates between the four, so nothing can disagree.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sim-car
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: vehicle-sim
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: vehicle-sim
+  ports:
+    - name: metrics
+      port: 9101
+      targetPort: metrics
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sim-car
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: vehicle-sim
+spec:
+  serviceName: sim-car
+  # "the fleet grows from 3 to 50 cars by changing one number" — this is the
+  # number. The fabric overlay raises it.
+  replicas: 3
+  # Essential at 50. OrderedReady starts pods one at a time, each waiting for
+  # the previous to report Ready, which turns scaling the fleet into a
+  # multi-minute serial crawl. Nothing here depends on start order: the cars
+  # are independent and so are their certificates.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-sim
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vehicle-sim
+    spec:
+      securityContext:
+        # The image's `app` user. The CSI volume below is told the same number,
+        # so the mounted key is readable without making it world-readable.
+        fsGroup: 10001
+      containers:
+        - name: vehicle-sim
+          image: ghcr.io/ryanfio15/fleetcontroller/vehicle-sim:dev
+          ports:
+            - name: metrics
+              containerPort: 9101
+          env:
+            # The whole identity mechanism, in four lines.
+            - name: SIM_VEHICLE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # In-cluster Service in the base. The fabric overlay repoints this
+            # at edge-1's NodePort, because the PDF wants the sims reaching
+            # ingest over the node network from a different node "as real
+            # devices would" — which a ClusterIP Service would short-circuit.
+            - name: SIM_INGEST_URL
+              value: https://ingest:8443/v1/telemetry
+            - name: SIM_TLS_CERT
+              value: /tls/tls.crt
+            - name: SIM_TLS_KEY
+              value: /tls/tls.key
+            # Pins verification to the project CA rather than the system trust
+            # store, so no public root can vouch for ingest.
+            - name: SIM_TLS_CA
+              value: /tls/ca.crt
+            - name: SIM_SAMPLE_HZ
+              value: "1"
+            # A hard floor on end-to-end latency, not a throughput knob: the
+            # oldest reading in a batch is already this old when it is sent.
+            # Stage 0 §14 blew the 5s SLO on this alone.
+            - name: SIM_BATCH_SECONDS
+              value: "2"
+            - name: SIM_FAULT
+              value: none
+            - name: LOG_LEVEL
+              value: INFO
+          resources:
+            requests:
+              # 50 of these is 1.25 cores and 3.2Gi — which is why the sims are
+              # sized before the fleet is scaled, not after.
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        # The answer to "a StatefulSet still has only one pod template, so how
+        # does pod n get certificate n?". An ephemeral CSI volume issues the
+        # certificate at mount time with the CN templated from pod metadata, so
+        # one template produces 50 distinct identities. No pod can read another
+        # vehicle's key, and renewal is the issuer's job.
+        - name: tls
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/issuer-name: fc-ca
+              csi.cert-manager.io/issuer-kind: Issuer
+              csi.cert-manager.io/issuer-group: cert-manager.io
+              csi.cert-manager.io/common-name: ${POD_NAME}
+              # 24h, per §7.2. Short lifetimes are what let this project skip
+              # CRL/OCSP distribution entirely, and they force the renewal path
+              # to exist from the start — the sim re-reads its cert in place
+              # when it changes (services/vehicle-sim/app/identity.py).
+              csi.cert-manager.io/duration: 24h
+              csi.cert-manager.io/renew-before: 8h
+              csi.cert-manager.io/key-usages: "client auth,digital signature,key encipherment"
+              csi.cert-manager.io/fs-group: "10001"

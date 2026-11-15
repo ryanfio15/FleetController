@@ -1,0 +1,82 @@
+# Nightly logical backup.  docs/TECHNICAL_PLAN.md §6.4, §10
+#
+# This exists because the data tier is a single point of failure by design:
+# nats-0 and timescaledb-0 pin to state-1 with local-path volumes, and the
+# project's redundancy story is JetStream replay rather than database
+# replication. Losing state-1 means restoring from here, so the restore needs
+# rehearsing before it is needed, not during.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pg-backup
+  namespace: fleet
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: pg-backup
+spec:
+  schedule: "17 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: pg-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 70
+          containers:
+            - name: pg-backup
+              image: timescale/timescaledb:2.17.2-pg16
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+              command:
+                - sh
+                - -ceu
+                - |
+                  out="/backup/fleet-$(date -u +%Y%m%dT%H%M%SZ).dump"
+                  # -Fc for pg_restore's selective restore, which is what makes
+                  # a partial recovery possible rather than all-or-nothing.
+                  pg_dump -h timescaledb -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+                          -Fc -f "$out"
+                  echo "wrote $out ($(du -h "$out" | cut -f1))"
+                  # Keep a week. The PVC is finite, and a backup job that fills
+                  # its own volume takes the database down with it on the night
+                  # it finally matters.
+                  find /backup -name 'fleet-*.dump' -mtime +7 -print -delete
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: pg-backup

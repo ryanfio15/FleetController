@@ -5,9 +5,10 @@ logs, and early warnings for overheating, trouble codes and weak batteries.
 
 Ryan Fioravanti · CSC478 · [Technical plan](docs/TECHNICAL_PLAN.md)
 
-**Status: Stage 0 complete.** The whole pipeline runs on one laptop under Docker
-Compose. Kubernetes comes later, and deliberately — see
-[§3 of the plan](docs/TECHNICAL_PLAN.md) for the staging rationale.
+**Status: Stage 0 complete, Stage 2 in progress.** The whole pipeline runs on one
+laptop under Docker Compose, and the Kubernetes manifests now exist for all of it
+— see [`deploy/k8s/`](deploy/k8s/README.md). They get debugged on `kind` before
+FABRIC, deliberately: see [§3 of the plan](docs/TECHNICAL_PLAN.md) for why.
 
 ```
 vehicle-sim ──HTTP──> ingest-api ──> NATS JetStream ──> stream-processor ──> TimescaleDB ──> Grafana
@@ -96,10 +97,24 @@ services/
   vehicle-sim/           drive-cycle model + store-and-forward client
 db/migrations/           numbered SQL, applied once by the migrate service
 deploy/compose/          the Stage 0 stack
+deploy/envoy/            mTLS proxy config — one copy, used by Compose and Kubernetes
 deploy/grafana/          datasource + dashboards, provisioned from files
-tools/certs/             local CA, ready for the mTLS work in P2
+deploy/k8s/              kustomize base + kind and fabric overlays
+deploy/kind/             local cluster definition for the Stage 2 rehearsal
+tools/certs/             local CA for the Compose path
 tests/unit/              contract and identity tests
 ```
+
+## Kubernetes
+
+```bash
+cp deploy/k8s/overlays/kind/secret.env.example deploy/k8s/overlays/kind/secret.env
+./fc.sh k8s-up        # kind cluster, dependencies, build, apply
+./fc.sh k8s-verify    # the same exit criterion, now through mTLS and NodePort
+```
+
+Needs `kind`, `helm` and `kubectl`. Details and the list of things that fail
+confusingly are in [`deploy/k8s/README.md`](deploy/k8s/README.md).
 
 ## Design notes worth knowing before you change things
 

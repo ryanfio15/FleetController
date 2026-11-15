@@ -1,0 +1,99 @@
+# The project CA, generated in-cluster.  docs/TECHNICAL_PLAN.md §7.2
+#
+# tools/certs/make-ca.sh stays as the Compose path, but nothing load-bearing
+# here depends on a private key sitting on a laptop: cert-manager bootstraps its
+# own root, so the cluster's trust chain has no offline component to lose or
+# accidentally commit.
+#
+# Note these are namespaced Issuers, not ClusterIssuers. A ClusterIssuer reads
+# its CA keypair from cert-manager's own namespace (--cluster-resource-namespace,
+# default `cert-manager`), *not* from the namespace the Certificate lives in —
+# a mismatch that fails with a confusing "secret not found" against a Secret you
+# can plainly see. Everything in this project runs in `fleet`, so a namespaced
+# Issuer sidesteps the question entirely.
+
+# Step 1: something to sign the root with.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: fc-selfsigned
+  namespace: fleet
+spec:
+  selfSigned: {}
+
+---
+# Step 2: the root itself. Mirrors make-ca.sh's `fc-root-ca`, 4096-bit, 10 years.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fc-ca
+  namespace: fleet
+spec:
+  isCA: true
+  commonName: fc-root-ca
+  subject:
+    organizations: [FleetController]
+  secretName: fc-ca-key-pair
+  duration: 87600h # 10y
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: fc-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+
+---
+# Step 3: the issuer every device and server certificate comes from. Referenced
+# by name from the vehicle-sim CSI volume and from the Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: fc-ca
+  namespace: fleet
+spec:
+  ca:
+    secretName: fc-ca-key-pair
+
+---
+# Envoy's server certificate.
+#
+# Long-lived on purpose, and the one place this project does *not* use 24-hour
+# certs. Envoy reads a `filename` data source once at config load and does not
+# hot-reload it, so a short lifetime here would mean a rollout every day for no
+# security gain — the short-lived certs that matter are the device ones, which
+# live on the client side where the sim re-reads them in place (§7.2).
+#
+# The SANs cover in-cluster callers and localhost. The fabric overlay appends
+# edge-1's address, because on FABRIC the sims deliberately connect over the
+# node network via NodePort rather than through the ClusterIP Service, exactly
+# as a real device would.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ingest-server
+  namespace: fleet
+spec:
+  secretName: ingest-server-tls
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  commonName: ingest
+  dnsNames:
+    - ingest
+    - ingest.fleet.svc
+    - ingest.fleet.svc.cluster.local
+    - localhost
+  ipAddresses:
+    - 127.0.0.1
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: fc-ca
+    kind: Issuer
+    group: cert-manager.io

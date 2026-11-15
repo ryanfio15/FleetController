@@ -1,0 +1,90 @@
+# Site-specific values — the ONLY file to edit per FABRIC slice.
+#
+# Three placeholders, all of which come from the slice once it exists:
+#
+#   EDGE1_ADDR   edge-1's FABNetv4 address
+#   NODE_CIDR    the slice's FABNetv4 subnet, e.g. 10.132.4.0/24
+#
+# They are left as obviously-invalid strings on purpose. An unfilled placeholder
+# fails at `kubectl apply` with a validation error naming the field, rather than
+# deploying something that looks healthy and quietly cannot connect.
+#
+# Find them with:  grep -n 'EDGE1_ADDR\|NODE_CIDR' site.yaml
+
+# ---------------------------------------------------------------------------
+# 1. The sims connect to ingest over the node network, as the PDF requires
+#    ("simulators reach ingest over the network from a separate node, as real
+#    devices would"). A ClusterIP Service would skip that hop entirely, so this
+#    deliberately addresses edge-1's NodePort instead.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sim-car
+  namespace: fleet
+spec:
+  # The "one number" from the outline. 3 to start; raise to 50 for the scaling
+  # evidence in P8.
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: vehicle-sim
+          env:
+            - name: SIM_INGEST_URL
+              value: https://EDGE1_ADDR:30443/v1/telemetry
+
+---
+# ---------------------------------------------------------------------------
+# 2. Because the sims now address ingest by IP, that address has to be in the
+#    server certificate's SANs or every handshake fails hostname verification —
+#    and it will fail at the TLS layer, where the error mentions the
+#    certificate rather than the configuration.
+#
+#    Both lists are written out in full rather than appended to. Kustomize
+#    replaces arrays when patching, so a partial list here would silently drop
+#    the in-cluster names the migrate Job and Grafana rely on.
+# ---------------------------------------------------------------------------
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ingest-server
+  namespace: fleet
+spec:
+  dnsNames:
+    - ingest
+    - ingest.fleet.svc
+    - ingest.fleet.svc.cluster.local
+    - localhost
+    - edge-1
+  ipAddresses:
+    - 127.0.0.1
+    - EDGE1_ADDR
+
+---
+# ---------------------------------------------------------------------------
+# 3. That same hop is no longer pod-to-pod, so no podSelector can describe it.
+#    Traffic leaves the sim for a *node* address, which NetworkPolicy can only
+#    match as an ipBlock.
+#
+#    Keeping the in-cluster rule alongside it means the kind overlay's path
+#    still works here, which is what makes the two environments diffable.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vehicle-sim
+  namespace: fleet
+spec:
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingest
+      ports:
+        - { protocol: TCP, port: 8443 }
+    - to:
+        - ipBlock:
+            cidr: NODE_CIDR
+      ports:
+        - { protocol: TCP, port: 30443 }

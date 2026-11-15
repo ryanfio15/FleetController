@@ -1,0 +1,116 @@
+# Node placement.  docs/TECHNICAL_PLAN.md §10, PDF Chapter 2
+#
+# "Nodes are labeled by tier and workloads pinned with nodeSelectors: stateless
+# pods move freely, databases stay beside their local disks, and simulators
+# reach ingest over the network from a separate node, as real devices would."
+#
+# Nothing site-specific here — the tier labels are set by the RKE2 bootstrap and
+# are the same whichever FABRIC site the slice lands on.
+
+# ingest sits on the edge node because that is where devices arrive: NodePort
+# 30443 on edge-1 is the published entry point.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: edge
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: pipeline
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: pipeline
+
+---
+# The sims go on the pipeline tier, not the edge, specifically so their traffic
+# leaves the node and crosses the network to reach ingest. Co-locating them with
+# ingest would make the most interesting hop in the architecture a loopback
+# call.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sim-car
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: pipeline
+
+---
+# The data tier pins to state-1 and stays there, because local-path volumes are
+# node-local: a pod rescheduled elsewhere cannot see its own data. This is the
+# single point of failure §10 accepts by design — the redundancy story is
+# JetStream replay and the pg-backup CronJob, not replication.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: state
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timescaledb
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: state
+
+---
+# Runs beside the database it dumps, so the backup does not cross the network.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  namespace: fleet
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          nodeSelector:
+            tier: state
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: state

@@ -1,0 +1,90 @@
+# FABRIC overlay — RKE2 on five VMs.  docs/TECHNICAL_PLAN.md §3 (Stage 3), §10
+#
+# If this overlay is doing its job, the diff from `kind` is the entire diff
+# between a laptop and FABRIC: node placement, a named StorageClass, sealed
+# secrets, and the site's own addresses. Nothing here changes how any service
+# behaves.
+#
+# Fill in site.yaml before using this. See README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: fleet
+
+resources:
+  - ../../base
+
+images:
+  # Pulled from GHCR by the nodes. Pin to a git SHA rather than a moving tag so
+  # a rollback is a one-word edit and `kubectl describe` says what is actually
+  # running — ./fc.sh k8s-push sets this.
+  - name: ghcr.io/ryanfio15/fleetcontroller/ingest-api
+    newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/stream-processor
+    newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/vehicle-sim
+    newTag: dev
+
+patches:
+  # No user input needed — the tier labels come from the RKE2 bootstrap.
+  - path: placement.yaml
+
+  # Site-specific. This is the only file that needs editing per slice.
+  - path: site.yaml
+
+  # local-path is RKE2's default StorageClass, but naming it explicitly is worth
+  # the two lines: a cluster where someone has changed the default would
+  # otherwise put the database on whatever that new default is, and local-path's
+  # node affinity is exactly what pins the data tier to state-1.
+  - target:
+      kind: StatefulSet
+      name: nats
+    patch: |
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: local-path
+  - target:
+      kind: StatefulSet
+      name: timescaledb
+    patch: |
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: local-path
+  - target:
+      kind: PersistentVolumeClaim
+      name: pg-backup
+    patch: |
+      - op: add
+        path: /spec/storageClassName
+        value: local-path
+
+# ---------------------------------------------------------------------------
+# Secrets: sealed-secrets, not a secretGenerator (§7.3).
+#
+# A SealedSecret is encrypted to the cluster's own key, so unlike secret.env it
+# is safe to commit — which is the point, since this is the environment where
+# the manifests need to be reproducible from the repository alone.
+#
+# Generate it once the cluster exists and the controller is installed:
+#
+#   kubectl create secret generic fleet-db --dry-run=client -o yaml \
+#     --from-literal=POSTGRES_USER=fleet \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" \
+#     --from-literal=POSTGRES_DB=fleet \
+#   | kubeseal --format yaml --namespace fleet > fleet-db-sealed.yaml
+#
+# then uncomment the entry below. It is commented rather than referenced so this
+# overlay still builds — and can be reviewed — before the slice exists.
+# ---------------------------------------------------------------------------
+# resources:
+#   - fleet-db-sealed.yaml
+
+# ---------------------------------------------------------------------------
+# ingress-nginx-nodeport.yaml is NOT listed above on purpose. It targets
+# kube-system, and `namespace: fleet` here would rewrite it into the wrong
+# namespace where RKE2 would never see it. Apply it directly:
+#
+#   kubectl apply -f deploy/k8s/overlays/fabric/ingress-nginx-nodeport.yaml
+#
+# ./fc.sh k8s-apply does this when the context is the FABRIC cluster.
+# ---------------------------------------------------------------------------

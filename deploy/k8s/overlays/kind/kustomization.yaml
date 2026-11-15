@@ -1,0 +1,44 @@
+# kind overlay — the Stage 2 rehearsal target.
+#
+# Deliberately thin. Everything real is in the base; what differs here is only
+# that there are no node tiers to pin to, and that the secret is a plain
+# generated one rather than a sealed one. If this overlay ever has to patch
+# application behaviour, that is a bug in the base (§4 rule 2).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: fleet
+
+resources:
+  - ../../base
+
+# Images are built locally and side-loaded with `kind load docker-image`, so the
+# tag is whatever ./fc.sh k8s-build produced. `newName` is unchanged from the
+# base: using the same ghcr.io path locally means the only difference between
+# environments is which registry the node pulls from, not what the manifest
+# says.
+#
+# No imagePullPolicy patch is needed to make the side-loaded images win:
+# Kubernetes defaults the policy to IfNotPresent for any tag that is not
+# `latest`, and these are `dev`. Tagging them `latest` would flip the default to
+# Always and break the whole side-load approach with an ErrImagePull against an
+# image already sitting on the node.
+images:
+  - name: ghcr.io/ryanfio15/fleetcontroller/ingest-api
+    newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/stream-processor
+    newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/vehicle-sim
+    newTag: dev
+
+# Read from a gitignored file, exactly as the Compose stack reads .env — see
+# secret.env.example. Never a literal here: §7.3 says never commit a key,
+# including a throwaway local one, and a kustomization is as committed as
+# anything else.
+secretGenerator:
+  - name: fleet-db
+    envs:
+      - secret.env
+
+generatorOptions:
+  disableNameSuffixHash: false

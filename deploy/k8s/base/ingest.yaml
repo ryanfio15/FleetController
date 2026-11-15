@@ -1,0 +1,203 @@
+# Ingest: Envoy + ingest-api in one pod.  docs/TECHNICAL_PLAN.md §6.1, §7.1
+#
+# The security model of the whole device path is two facts about this file:
+#
+#  1. ingest-api binds 127.0.0.1. Envoy shares the pod's network namespace, so
+#     it can reach the API and nothing else in the cluster can. "The API is only
+#     reachable via Envoy" is therefore a property of the network namespace, not
+#     a NetworkPolicy anyone has to maintain.
+#  2. Port 30443 is raw TCP through to Envoy. Nothing terminates TLS in front of
+#     it, which is why ingest is a NodePort Service and explicitly not behind
+#     ingress-nginx — a proxy in the path would strip the client certificate and
+#     the identity model would collapse silently (§10).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: ingest
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: ingest
+  ports:
+    - name: telemetry
+      port: 8443
+      targetPort: telemetry
+      # Fixed by the PDF's Services table. Devices on edge-1 and outside.
+      nodePort: 30443
+
+---
+# Metrics live on their own ClusterIP Service so the telemetry NodePort does not
+# accidentally publish them too.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingest-metrics
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: ingest
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ingest
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: ingest
+spec:
+  # The floor of the PDF's "2 to 4 (HPA)". The HPA below owns it above that.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ingest
+    spec:
+      containers:
+        # ------------------------------------------------------------ envoy --
+        - name: envoy
+          image: envoyproxy/envoy:v1.32-latest
+          args: ["-c", "/etc/envoy/envoy.yaml"]
+          ports:
+            - name: telemetry
+              containerPort: 8443
+            - name: metrics
+              containerPort: 9100
+          # A TCP probe, not an HTTP one. The admin interface is bound to
+          # loopback (it carries /quitquitquit), so there is no HTTP endpoint
+          # kubelet can reach — and completing a TLS handshake from a probe
+          # would require giving kubelet a client certificate. Accepting a
+          # connection on 8443 is the honest available signal that the listener
+          # is up.
+          readinessProbe:
+            tcpSocket:
+              port: telemetry
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: telemetry
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 192Mi
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+            - name: tls
+              mountPath: /etc/envoy/tls
+              readOnly: true
+
+        # ------------------------------------------------------- ingest-api --
+        - name: ingest-api
+          image: ghcr.io/ryanfio15/fleetcontroller/ingest-api:dev
+          env:
+            - name: INGEST_NATS_URL
+              value: nats://nats:4222
+            # Both of these are already the defaults in settings.py. They are
+            # repeated here because the security posture of this pod should be
+            # readable from the manifest rather than inferred from a Python
+            # file — and because Compose overrides both, so seeing them set the
+            # other way is the whole difference between the environments.
+            - name: INGEST_HOST
+              value: 127.0.0.1
+            - name: INGEST_ALLOW_INSECURE_IDENTITY
+              value: "false"
+            - name: INGEST_MAX_READINGS_PER_BATCH
+              value: "500"
+            - name: LOG_LEVEL
+              value: INFO
+          # exec, not httpGet. kubelet probes the pod IP, and this container is
+          # bound to 127.0.0.1 — an httpGet probe here fails every time and
+          # CrashLoopBackOffs a working pod. exec runs inside the container's
+          # network namespace, which is the same trick the Compose healthcheck
+          # uses.
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/readyz')
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              # The HPA scales on CPU utilisation, which is meaningless without
+              # a request to be a percentage of. Removing this silently disables
+              # autoscaling.
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+        - name: tls
+          secret:
+            # Issued by cert-manager from certs.yaml. Contains tls.crt, tls.key
+            # and — because the issuer is a CA — ca.crt, which is what Envoy
+            # validates client certificates against.
+            secretName: ingest-server-tls
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ingest
+  namespace: fleet
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ingest
+  # "Ingest scales 2 to 4 on CPU" — PDF, Services and Scaling.
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ingest
+  namespace: fleet
+spec:
+  # So the Stage 3 `kubectl drain worker-1` exit test does not black out
+  # ingestion while it runs (§10).
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingest

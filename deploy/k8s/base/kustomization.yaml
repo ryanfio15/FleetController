@@ -1,0 +1,87 @@
+# FleetController base.  docs/TECHNICAL_PLAN.md §10
+#
+# Everything lives here; the overlays patch only what genuinely differs between
+# kind and FABRIC. If an overlay ever needs to patch application *behaviour*,
+# that is a bug in this base — push the difference into an environment variable
+# instead (§4 rule 2).
+#
+# Not included yet, because the code does not exist: fleet-api, web-ui and
+# keycloak (P3). The PDF's architecture has them; nothing here references an
+# image that cannot be built. The Ingress in grafana.yaml reserves their paths.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: fleet
+
+resources:
+  - namespace.yaml
+  - certs.yaml
+  - nats.yaml
+  - timescaledb.yaml
+  - migrate-job.yaml
+  - ingest.yaml
+  - processor.yaml
+  - vehicle-sim.yaml
+  - grafana.yaml
+  - pg-backup.yaml
+  # If the first bring-up on a new cluster fails in a way that looks like
+  # nothing can talk to anything, comment this out to confirm whether it is the
+  # policies before debugging anything else.
+  - networkpolicy.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: fleetcontroller
+    # Metadata only. Folding a label into the selectors would make it part of
+    # every Deployment's immutable selector, and changing it later would then
+    # require deleting and recreating the workloads.
+    includeSelectors: false
+
+# The whole of §4 rule 1, mechanised: these read the committed files directly,
+# so Compose and Kubernetes cannot drift apart because there is only ever one
+# copy of each. The generated names carry a content hash, which means editing a
+# dashboard or adding a migration rolls the pods that consume it without anyone
+# having to remember to.
+#
+# The `../` paths are why ./fc.sh builds these with
+# `kubectl kustomize --load-restrictor LoadRestrictionsNone | kubectl apply -f -`
+# rather than `kubectl apply -k`. Kustomize refuses to read files above its own
+# directory by default, and `kubectl apply -k` has no flag to relax it. The
+# alternative was a second copy of every shared file under deploy/k8s/, which is
+# the one thing §4 rule 1 exists to prevent.
+configMapGenerator:
+  - name: migrations
+    files:
+      - ../../../db/migrations/001_init.sql
+      - ../../../db/migrations/002_seed_vehicles.sql
+      - ../../../db/migrations/003_vehicle_ids_ordinal.sql
+      - ../../../db/migrate.sh
+
+  - name: envoy-config
+    files:
+      - envoy.yaml=../../envoy/envoy.yaml
+
+  - name: grafana-datasources
+    files:
+      - timescaledb.yml=../../grafana/provisioning/datasources/timescaledb.yml
+
+  - name: grafana-dashboard-providers
+    files:
+      - dashboards.yml=../../grafana/provisioning/dashboards/dashboards.yml
+
+  - name: grafana-dashboards
+    files:
+      - fleet-overview.json=../../grafana/dashboards/fleet-overview.json
+
+generatorOptions:
+  # The default would add it to everything; the labels: block above already
+  # covers metadata, and a disableNameSuffixHash here would defeat the rollout
+  # behaviour described above.
+  labels:
+    app.kubernetes.io/part-of: fleetcontroller
+
+# Secrets are not here. The `fleet-db` Secret this base expects — with keys
+# POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB — is supplied per overlay:
+# a plain secretGenerator under kind, sealed-secrets on FABRIC (§7.3). The
+# connection strings are composed from those three keys inside the pod specs,
+# so the password is stored exactly once.

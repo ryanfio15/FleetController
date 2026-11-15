@@ -1,0 +1,151 @@
+# Grafana.  docs/TECHNICAL_PLAN.md §9
+#
+# Dashboards are provisioned from files in the repository, loaded via the same
+# deploy/grafana/ directory the Compose stack bind-mounts (§4 rule 1). A
+# hand-clicked dashboard does not survive a pod restart and cannot be reviewed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: grafana
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+    spec:
+      securityContext:
+        fsGroup: 472 # the grafana user in this image
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.4.0
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Anonymous access, as in Stage 0, so the exit criterion — a reading
+            # visible on a panel with no manual steps — stays literally true.
+            # This is a documented gap, not an oversight: the cluster is only
+            # reachable through the bastion tunnel, and Keycloak replaces this
+            # in P3 (§7).
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Admin
+            - name: GF_AUTH_BASIC_ENABLED
+              value: "false"
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "true"
+            - name: GF_USERS_DEFAULT_THEME
+              value: dark
+            # Served at /grafana behind ingress-nginx (PDF: routes /, /api,
+            # /grafana, /auth). Without both of these every static asset 404s,
+            # which looks like a broken deployment rather than a path problem.
+            - name: GF_SERVER_ROOT_URL
+              value: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "true"
+            # Consumed by ${FC_DB_*} in the committed datasource file.
+            - name: FC_DB_USER
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+            - name: FC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+            - name: FC_DB_NAME
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+          readinessProbe:
+            httpGet:
+              path: /robots.txt
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /robots.txt
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            # No PVC. Everything Grafana would persist here is provisioned from
+            # the ConfigMaps below, so there is no state worth a volume.
+            - name: state
+              mountPath: /var/lib/grafana
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-providers
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+      volumes:
+        - name: state
+          emptyDir: {}
+        # Three separate ConfigMaps because a ConfigMap is flat: the two
+        # provisioning files live in sibling directories Grafana scans
+        # independently, and a single map could not reproduce that layout.
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-providers
+          configMap:
+            name: grafana-dashboard-providers
+
+---
+# Users reach this through the SSH bastion tunnel to NodePort 30080 (PDF). No
+# host is set on purpose: a tunnelled request arrives with whatever Host header
+# the local port implies, and pinning one here would reject it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: fleet
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          # /, /api and /auth join this list when web-ui, fleet-api and
+          # Keycloak exist (P3). Grafana is the only one with a service today.
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  name: http

@@ -1,0 +1,30 @@
+# RKE2 ships its own ingress-nginx, and not in the shape this project wants.
+#
+# The bundled chart deploys a DaemonSet on hostPorts 80/443. The PDF's Services
+# table specifies NodePort 30080, reached through the FABRIC bastion tunnel, so
+# the packaged component needs reconfiguring rather than replacing: RKE2 watches
+# HelmChartConfig and re-renders its own chart with these values merged in.
+#
+# Applied to kube-system, not fleet, because that is where RKE2 manages its
+# packaged components. It is therefore kept out of the namespace-scoped part of
+# the overlay — see kustomization.yaml.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-ingress-nginx
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    controller:
+      service:
+        enabled: true
+        type: NodePort
+        nodePorts:
+          http: 30080
+      # hostPort and NodePort together would bind 80 on every node for no
+      # reason and make the tunnel's target ambiguous.
+      hostPort:
+        enabled: false
+      # ingress-nginx must be reachable on the node users tunnel to. Running it
+      # everywhere keeps that true regardless of which node that is.
+      kind: DaemonSet

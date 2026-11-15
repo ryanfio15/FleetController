@@ -1,0 +1,68 @@
+# Schema migrations.  docs/TECHNICAL_PLAN.md §4 rule 1
+#
+# Runs db/migrate.sh — the same script, byte for byte, that the Compose stack
+# runs as a one-shot service. It is mounted from a ConfigMap generated directly
+# from db/, so there is one migration path rather than two that drift.
+#
+# Two things this Job deliberately does NOT do:
+#
+#  * wait for the database via an initContainer. migrate.sh already polls
+#    pg_isready for 60s, and the processor opens its pool with wait=True. The
+#    ordering is handled where it belongs, by the things that need it.
+#  * set PGHOST. The script defaults to `timescaledb`, which is exactly what
+#    the Service is called. Relying on the default is the proof that the script
+#    needs no per-environment configuration.
+#
+# One trap worth knowing: a Job's spec is immutable. Re-applying after a
+# migration is added fails with "field is immutable", because the generated
+# ConfigMap's name hash moved but the Job's name did not. `./fc.sh k8s-apply`
+# deletes this Job before applying for that reason.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: migrate
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          # The database image, because it is the one that ships psql and
+          # pg_isready at a version that matches the server.
+          image: timescale/timescaledb:2.17.2-pg16
+          command: ["sh", "/migrations/migrate.sh"]
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: migrations
+              mountPath: /migrations
+              readOnly: true
+      volumes:
+        # Holds both the .sql files and migrate.sh itself. The script globs
+        # /migrations/*.sql, so having it sit alongside them is harmless and
+        # saves a second volume.
+        - name: migrations
+          configMap:
+            name: migrations

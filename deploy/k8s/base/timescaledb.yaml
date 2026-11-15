@@ -1,0 +1,139 @@
+# TimescaleDB + postgres-exporter sidecar.  docs/TECHNICAL_PLAN.md §6.4
+#
+# The Service is named `timescaledb` and nothing else will do: it is the default
+# PGHOST in db/migrate.sh and the host in deploy/grafana's datasource, both of
+# which are committed files shared with Compose. Getting the name right here is
+# what lets the same migration script and the same datasource run unmodified in
+# both environments (§4 rule 1).
+apiVersion: v1
+kind: Service
+metadata:
+  name: timescaledb
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: timescaledb
+spec:
+  # Headless, per the PDF's Services table. One pod, so this resolves to its IP.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: timescaledb
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timescaledb
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: timescaledb
+spec:
+  serviceName: timescaledb
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timescaledb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timescaledb
+    spec:
+      securityContext:
+        # postgres is uid 70 in this Alpine-based image, not the 999 of the
+        # Debian ones. The entrypoint starts as root and drops privileges
+        # itself, so this is belt-and-braces rather than load-bearing — but
+        # Stage 0 §14 found volumes mounting root-owned, and a PVC is the same
+        # trap with a longer feedback loop.
+        fsGroup: 70
+      containers:
+        - name: timescaledb
+          image: timescale/timescaledb:2.17.2-pg16
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+            # A subdirectory, not the mount root. Some provisioners leave a
+            # lost+found in a fresh volume and initdb refuses to run in a
+            # non-empty directory — a first-boot-only failure, which is the
+            # worst kind to debug on a cluster you just built.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command:
+                ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command:
+                ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+
+        # The exporter sidecar the PDF's component table already specifies.
+        # Reaches the database over loopback, so it needs no network policy of
+        # its own.
+        - name: postgres-exporter
+          image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+          ports:
+            - name: metrics
+              containerPort: 9187
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+            # Composed from the three above rather than stored as a fourth
+            # secret key, so the password exists in exactly one place.
+            # Kubernetes expands $(VAR) against earlier entries in this list.
+            - name: DATA_SOURCE_NAME
+              value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@127.0.0.1:5432/$(POSTGRES_DB)?sslmode=disable
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            # The number the §6.4 capacity math is against: ~4GB/day raw at 50
+            # cars, which is about five days before the database wedges if the
+            # compression and retention policies are not in place. They are not
+            # optional here.
+            storage: 20Gi

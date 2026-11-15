@@ -7,6 +7,14 @@ tools/certs/out/
 *.csr
 *.srl
 
+# kustomize secretGenerator inputs. Only the *.example files are committed —
+# sealed secrets are safe to commit and are named *-sealed.yaml.
+deploy/k8s/overlays/*/secret.env
+!deploy/k8s/overlays/*/secret.env.example
+
+# fetched cluster kubeconfigs
+deploy/fabric/kubeconfig*
+
 # python
 __pycache__/
 *.py[cod]

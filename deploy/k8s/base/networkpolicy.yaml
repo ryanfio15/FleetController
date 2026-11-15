@@ -1,0 +1,267 @@
+# Default-deny, plus one section per workload.  docs/TECHNICAL_PLAN.md §7.1
+#
+# Policies are additive: a pod is allowed the union of every policy selecting
+# it, and denied everything else once any policy selects it at all. So each
+# connection needs agreement at *both* ends — an egress rule on the client and
+# an ingress rule on the server. Forgetting the second half is the usual reason
+# a rule "doesn't work".
+#
+# Two things to know before editing:
+#
+#  * A policy you have never watched block anything is a policy you have not
+#    tested. The verification step deliberately deletes one allowance and
+#    confirms writes stop.
+#  * kind's default CNI may not enforce NetworkPolicy at all, in which case
+#    everything here silently passes and proves nothing. deploy/kind/cluster.yaml
+#    has the note on checking that; RKE2's Canal does enforce them.
+
+# ----------------------------------------------------------------- default --
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: fleet
+spec:
+  # Empty selector: every pod in the namespace.
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+
+---
+# DNS, for everything. Written second on purpose — this is the rule whose
+# absence breaks a cluster in the most confusing way, because every symptom
+# looks like the application rather than the network.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: fleet
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+
+# ------------------------------------------------------------------ ingest --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingest
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ingest
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # From anywhere, and that is the intent rather than a shortcut. This is the
+    # device endpoint: traffic arrives through NodePort 30443 from outside the
+    # cluster, so the source address is not knowable and is not what
+    # authenticates it. The client certificate is (§7.1).
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { protocol: TCP, port: 8443 }
+    # Metrics, in-namespace only.
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 9100 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - { protocol: TCP, port: 4222 }
+
+# -------------------------------------------------------------- processor --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: processor
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: processor
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 9100 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nats
+      ports:
+        - { protocol: TCP, port: 4222 }
+    # This is the allowance the break/fix test removes: delete it and reading
+    # writes must stop, with the processor nacking and JetStream retaining.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timescaledb
+      ports:
+        - { protocol: TCP, port: 5432 }
+
+# -------------------------------------------------------------------- nats --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nats
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingest
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: processor
+      ports:
+        - { protocol: TCP, port: 4222 }
+    # KEDA polls the monitoring endpoint for consumer lag from its own
+    # namespace. Without this the ScaledObject reports zero lag and never
+    # scales — and reports it as healthy, which is the hard part to notice.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 8222 }
+
+# ------------------------------------------------------------- timescaledb --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timescaledb
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timescaledb
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: processor
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: migrate
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pg-backup
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 9187 }
+
+# ----------------------------------------------------------------- grafana --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # ingress-nginx lives in its own namespace under kind and in kube-system
+    # under RKE2, so both are named here rather than making the overlays patch
+    # a policy.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: TCP, port: 3000 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timescaledb
+      ports:
+        - { protocol: TCP, port: 5432 }
+
+# ------------------------------------------------- migrate and pg-backup --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-clients
+  namespace: fleet
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [migrate, pg-backup]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timescaledb
+      ports:
+        - { protocol: TCP, port: 5432 }
+
+# ------------------------------------------------------------ vehicle-sim --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vehicle-sim
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vehicle-sim
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 9101 }
+  egress:
+    # In-cluster, which is how the base and the kind overlay run.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingest
+      ports:
+        - { protocol: TCP, port: 8443 }
+    # On FABRIC the sims deliberately go out to edge-1's NodePort instead, so
+    # the traffic crosses the node network as a real device's would. That hop
+    # is not pod-to-pod, so a podSelector cannot express it and the fabric
+    # overlay adds an ipBlock for the node network here.

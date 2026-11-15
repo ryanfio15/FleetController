@@ -1,0 +1,105 @@
+# stream-processor — the scaling target.  docs/TECHNICAL_PLAN.md §6.3, §10
+#
+# Stateless by design, which is what makes scaling it safe: all replicas pull
+# from one durable consumer, so there is no per-vehicle ordering and no replica
+# affinity. Trips and sustained-condition alerts are SQL on a ticker guarded by
+# an advisory lock, never in-process state (§6.3). Stage 0 proved the claim with
+# three replicas and zero duplicate rows.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: processor
+spec:
+  # KEDA owns this field once the ScaledObject below is admitted. The value
+  # here is only what the Deployment starts at.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: processor
+    spec:
+      containers:
+        - name: processor
+          image: ghcr.io/ryanfio15/fleetcontroller/stream-processor:dev
+          ports:
+            # containerPort only — deliberately no hostPort. Stage 0 §14 found
+            # that a fixed host port blocks scaling this exact deployment, and
+            # hostPort is that same mistake with a Kubernetes spelling: the
+            # second replica on a node would stay Pending forever.
+            - name: metrics
+              containerPort: 9100
+          env:
+            - name: PROCESSOR_NATS_URL
+              value: nats://nats:4222
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+            # Composed from the parts so the password lives in one place.
+            # Kubernetes expands $(VAR) against earlier entries in this list.
+            - name: PROCESSOR_DB_DSN
+              value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@timescaledb:5432/$(POSTGRES_DB)
+            - name: LOG_LEVEL
+              value: INFO
+          # Detects a dead listener, which is honestly most of what a probe can
+          # tell you here: prometheus_client serves /metrics from its own
+          # thread, so a stalled consumer loop would still answer. The real
+          # backpressure signal is JetStream consumer lag — which is precisely
+          # what KEDA scales on, and what the Pipeline Health dashboard graphs.
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 384Mi
+
+---
+# KEDA.  Settings lifted from §10 unchanged.
+#
+# Two traps, both documented there and both worth repeating where someone might
+# edit this file:
+#
+#  * KEDA creates and owns an HPA for this Deployment. Never also define one —
+#    two autoscalers on one target fight and the replica count flaps.
+#  * cooldownPeriod has to be long enough that scale-down does not thrash while
+#    a backlog is still draining.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: processor
+  namespace: fleet
+spec:
+  scaleTargetRef:
+    name: processor
+  minReplicaCount: 1
+  maxReplicaCount: 6
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: nats-jetstream
+      metadata:
+        natsServerMonitoringEndpoint: nats.fleet.svc:8222
+        account: "$G"
+        stream: TELEMETRY
+        # Must match PROCESSOR_DURABLE_NAME, which defaults to `processor` in
+        # services/stream-processor/app/settings.py. KEDA scaling a consumer
+        # that does not exist reports zero lag and never scales, with no error.
+        consumer: processor
+        lagThreshold: "500"
+        activationLagThreshold: "10"

@@ -1,0 +1,122 @@
+# NATS JetStream — the durable buffer.  docs/TECHNICAL_PLAN.md §6.2
+#
+# Single replica by design (PDF Chapter 2: "nats StatefulSet, 1"). The
+# redundancy story in this architecture is JetStream's replay, not clustering —
+# see §10 on the data tier being a deliberate single point of failure.
+#
+# The TELEMETRY stream itself is not declared here. ingest-api creates it
+# idempotently at startup (services/ingest-api/app/main.py), which keeps the
+# topology beside the code that depends on it and means there is no init Job to
+# sequence.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: nats
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    # The monitoring endpoint KEDA scrapes for consumer lag. It has to be on a
+    # Service, not just a containerPort, because the ScaledObject addresses it
+    # as nats.fleet.svc:8222 (§10).
+    - name: monitor
+      port: 8222
+      targetPort: monitor
+
+---
+# Stable DNS for the StatefulSet (PDF: "Headless Services give StatefulSets
+# stable DNS"), giving nats-0.nats-headless.fleet.svc.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-headless
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: nats
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: nats
+spec:
+  serviceName: nats-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          # Identical to the Compose command, so the stream behaves the same in
+          # both environments.
+          args: ["-js", "-sd", "/data", "-m", "8222"]
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: monitor
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            # CPU requests but no CPU limits throughout this project: a limit
+            # buys throttling, while the request is what the scheduler and the
+            # ingest HPA actually need. Memory is limited, because memory
+            # pressure is not something to share.
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            # Sized against the stream's own max_bytes of 4GB (§6.2). The
+            # headroom is deliberate, not a coincidence.
+            storage: 5Gi
+        # storageClassName is deliberately unset: kind defaults to `standard`
+        # and RKE2 to `local-path`, and in both cases the default is the one we
+        # want. An overlay that needs a specific class patches it here.
