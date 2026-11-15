@@ -1,0 +1,155 @@
+# FleetController ingest proxy.  docs/TECHNICAL_PLAN.md §6.1, §7.1
+#
+# ONE copy of this file (plan §4 rule 1): Kubernetes mounts it as a ConfigMap and
+# Compose bind-mounts the same path when mTLS lands there. The TLS filenames below
+# are cert-manager's (tls.crt / tls.key / ca.crt), so the Compose side maps
+# make-ca.sh's output onto those names rather than this file growing a second set
+# of paths.
+#
+# Envoy is the only thing in this pod listening on a routable address. ingest-api
+# binds 127.0.0.1, which makes "the API is only reachable via Envoy" a property of
+# the network namespace rather than a convention someone has to remember (§6.1).
+
+# Loopback-only: the admin interface carries /quitquitquit and /drain_listeners,
+# so it is never exposed to the pod network. The observability listener below
+# re-publishes exactly one admin path and nothing else.
+admin:
+  address:
+    socket_address: { address: 127.0.0.1, port_value: 9901 }
+
+static_resources:
+  listeners:
+    # ------------------------------------------------------------- telemetry --
+    # Reached as NodePort 30443. Nothing may terminate TLS in front of this or
+    # the client certificate never arrives and the identity model collapses
+    # (§10) — which is why ingest is a NodePort Service and not an Ingress.
+    - name: telemetry
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8443 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: telemetry
+
+                # The two settings the whole device-identity model rests on.
+                # SANITIZE_SET discards any x-forwarded-client-cert a client sent
+                # itself and replaces it with Envoy's own, so the header
+                # app/identity.py parses cannot be forged (§7.1).
+                forward_client_cert_details: SANITIZE_SET
+                set_current_client_cert_details:
+                  subject: true
+                  dns: true
+                  uri: true
+
+                # Trust no peer address as "internal". This listener faces
+                # devices from outside the cluster, so none of them should be
+                # able to have their x-envoy-* headers believed. Empty rather
+                # than absent on purpose: Envoy's default trusts RFC1918, and it
+                # warns that the default is changing.
+                internal_address_config: {}
+
+                route_config:
+                  name: telemetry
+                  virtual_hosts:
+                    - name: ingest
+                      domains: ["*"]
+                      routes:
+                        - match: { prefix: "/" }
+                          route:
+                            cluster: ingest_api
+                            # Comfortably over the sim's 10s client timeout so a
+                            # slow JetStream publish surfaces as the app's own
+                            # 503 + Retry-After rather than as an Envoy 504.
+                            timeout: 30s
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+          # Belongs to the filter chain, not the listener — a listener-level
+          # transport_socket is rejected outright, which is the good failure
+          # mode. `--mode validate` catches it; a NodePort that silently served
+          # plaintext would not.
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              # The line that makes an anonymous client fail at the handshake
+              # rather than reach the application. The §8.1 negative tests
+              # assert exactly this, and assert the *handshake* fails — a test
+              # that only checked for a non-200 would pass against a listener
+              # with this set to false.
+              require_client_certificate: true
+              common_tls_context:
+                tls_params:
+                  tls_minimum_protocol_version: TLSv1_2
+                tls_certificates:
+                  # Read once at config load. Envoy does not hot-reload a
+                  # `filename` data source, so the server Certificate is issued
+                  # long-lived (90d, see deploy/k8s/base/certs/) and its renewal
+                  # needs a rollout. The upgrade path if that ever matters is SDS
+                  # with a watched_directory. Device certs are the short-lived
+                  # ones (24h, §7.2) and they live on the client side, where the
+                  # sim re-reads them in place.
+                  - certificate_chain: { filename: /etc/envoy/tls/tls.crt }
+                    private_key: { filename: /etc/envoy/tls/tls.key }
+                validation_context:
+                  # The project CA, and only the project CA. A cert from any
+                  # other issuer fails here.
+                  trusted_ca: { filename: /etc/envoy/tls/ca.crt }
+
+    # --------------------------------------------------------- observability --
+    # ingest-api's /metrics is on loopback with everything else, so Prometheus
+    # cannot reach it. This listener republishes it, plus Envoy's own stats, on
+    # one scrape target. Both routes match an *exact path*: a prefix match on the
+    # admin cluster would expose /quitquitquit to the pod network.
+    - name: observability
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 9100 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: observability
+                internal_address_config: {}
+                route_config:
+                  name: observability
+                  virtual_hosts:
+                    - name: observability
+                      domains: ["*"]
+                      routes:
+                        - match: { path: "/metrics" }
+                          route: { cluster: ingest_api }
+                        - match: { path: "/stats/prometheus" }
+                          route: { cluster: envoy_admin }
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    # Same pod, same network namespace — this is the only route to the API.
+    - name: ingest_api
+      type: STATIC
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: ingest_api
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: 8080 }
+
+    - name: envoy_admin
+      type: STATIC
+      connect_timeout: 1s
+      load_assignment:
+        cluster_name: envoy_admin
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: 127.0.0.1, port_value: 9901 }

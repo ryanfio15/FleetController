@@ -6,7 +6,7 @@
 #
 #   fc-root-ca            self-signed root
 #   ├── ingest-server     server cert, SAN: ingest, localhost, 127.0.0.1
-#   └── sim-car-NN        one client cert per vehicle, CN == vehicle_id
+#   └── sim-car-N         one client cert per vehicle, CN == vehicle_id
 #
 # The CN is load-bearing: ingest takes the vehicle_id from it and from nowhere
 # else (docs/TECHNICAL_PLAN.md §6.1).
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # Git Bash / MSYS on Windows rewrites arguments that look like absolute paths,
-# turning "/O=FleetController/CN=sim-car-01" into "C:/Program Files/Git/O=...".
+# turning "/O=FleetController/CN=sim-car-0" into "C:/Program Files/Git/O=...".
 # Harmless to export on Linux and macOS.
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
@@ -69,8 +69,11 @@ keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = clientAuth
 EXT
 
-for i in $(seq 1 "$COUNT"); do
-    id=$(printf 'sim-car-%02d' "$i")
+# 0-based and unpadded, because the CN has to equal the StatefulSet pod name
+# that cert-manager-csi-driver templates in Kubernetes: pod name == hostname ==
+# CN == vehicle_id, with no translation step anywhere.
+for i in $(seq 0 $((COUNT - 1))); do
+    id="sim-car-$i"
     log "issuing client cert $id"
 
     openssl genrsa -out "$id.key" 2048
@@ -91,5 +94,5 @@ chmod 600 ./*.key
 echo
 echo "Wrote $((COUNT + 1)) leaf certs to tools/certs/out/"
 echo "Verify one with:"
-echo "  openssl verify -CAfile tools/certs/out/ca.crt tools/certs/out/sim-car-01.crt"
-echo "  openssl x509 -in tools/certs/out/sim-car-01.crt -noout -subject"
+echo "  openssl verify -CAfile tools/certs/out/ca.crt tools/certs/out/sim-car-0.crt"
+echo "  openssl x509 -in tools/certs/out/sim-car-0.crt -noout -subject"

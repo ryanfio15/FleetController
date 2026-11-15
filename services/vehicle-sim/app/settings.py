@@ -5,12 +5,22 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SIM_", extra="ignore")
 
     # Identity. Empty means "claim the lowest free ordinal from identity_dir";
-    # see resolve_vehicle_id(). P2 replaces this with the certificate CN.
+    # see resolve_vehicle_id(). Under Kubernetes this is set from the pod name
+    # via fieldRef, which is the whole reason the IDs are unpadded.
     vehicle_id: str = ""
     identity_dir: str = "/identity"
     max_vehicles: int = 50
 
     ingest_url: str = "http://ingest:8080/v1/telemetry"
+
+    # The device's client certificate, mounted by cert-manager-csi-driver in
+    # Kubernetes and by a bind mount under Compose. An empty tls_cert means plain
+    # HTTP, which is how the Compose stack runs until Envoy lands there. Nothing
+    # here branches on *which* environment this is — only on whether a
+    # certificate was supplied (plan §4 rule 2).
+    tls_cert: str = ""
+    tls_key: str = ""
+    tls_ca: str = ""
 
     sample_hz: float = 1.0
 

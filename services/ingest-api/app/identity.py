@@ -11,7 +11,7 @@ from urllib.parse import unquote
 
 # Envoy sets x-forwarded-client-cert with `forward_client_cert_details:
 # SANITIZE_SET`, so anything a client sent under that header is discarded first.
-# Format: By=...;Hash=...;Subject="CN=sim-car-01,O=FleetController";URI=...
+# Format: By=...;Hash=...;Subject="CN=sim-car-1,O=FleetController";URI=...
 _SUBJECT = re.compile(r'Subject="([^"]*)"')
 _HASH = re.compile(r"Hash=([0-9a-fA-F]+)")
 _CN = re.compile(r"CN=([^,/]+)")

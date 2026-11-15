@@ -12,19 +12,16 @@ generating plausible data:
 """
 
 import asyncio
-import atexit
-import os
 import random
 import signal
-import socket
 import uuid
 from collections import deque
 from datetime import datetime, timezone
-from pathlib import Path
 
 import httpx
 from prometheus_client import Counter, Gauge, start_http_server
 
+from app.identity import cert_stamp, resolve_vehicle_id, tls_kwargs
 from app.model import Vehicle
 from app.settings import settings
 from fc_common.logging import setup
@@ -37,42 +34,6 @@ POSTS = Counter("sim_posts_total", "Telemetry POSTs by status", ["status"])
 BUFFERED = Gauge("sim_buffer_readings", "Readings held in the forward buffer")
 
 _shutdown = asyncio.Event()
-
-
-def resolve_vehicle_id() -> str:
-    """Claim a stable ordinal identity.
-
-    Scaled Compose replicas are identical and get hex hostnames, so identity
-    has to come from somewhere outside the container. Each sim atomically
-    claims the lowest free ordinal by creating sim-car-NN.claim with O_EXCL on
-    a shared volume, and releases it on shutdown.
-
-    This deliberately emulates StatefulSet ordinals, which is how Stage 2 must
-    assign identity too: a Deployment's replicas cannot each mount a different
-    certificate, so vehicle-sim becomes a StatefulSet in Kubernetes and the
-    claim file is replaced by the per-ordinal cert volume.
-    """
-    if settings.vehicle_id:
-        return settings.vehicle_id
-
-    claims = Path(settings.identity_dir)
-    claims.mkdir(parents=True, exist_ok=True)
-
-    for ordinal in range(1, settings.max_vehicles + 1):
-        path = claims / f"sim-car-{ordinal:02d}.claim"
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            continue
-        with os.fdopen(fd, "w") as handle:
-            handle.write(socket.gethostname())
-        atexit.register(path.unlink, missing_ok=True)
-        return path.stem
-
-    raise RuntimeError(
-        f"all {settings.max_vehicles} vehicle identities are claimed; "
-        "raise SIM_MAX_VEHICLES or clear the identity volume"
-    )
 
 
 class Forwarder:
@@ -172,12 +133,19 @@ async def run() -> None:
 
     log.info(
         "starting",
-        extra={"vehicle_id": vehicle_id, "fault": settings.fault, "url": settings.ingest_url},
+        extra={
+            "vehicle_id": vehicle_id,
+            "fault": settings.fault,
+            "url": settings.ingest_url,
+            "mtls": bool(settings.tls_cert),
+        },
     )
 
     pending: list[dict] = []
     samples_taken = 0
-    async with httpx.AsyncClient() as client:
+    stamp = cert_stamp()
+    client = httpx.AsyncClient(**tls_kwargs())
+    try:
         while not _shutdown.is_set():
             car.step(period)
             if settings.fault != "none" and car.elapsed >= settings.fault_after_seconds:
@@ -197,12 +165,23 @@ async def run() -> None:
                 if pending:
                     forwarder.add(pending)
                     pending = []
+
+                    # Pick up a renewed certificate before sending, not after.
+                    current = cert_stamp()
+                    if current is not None and current != stamp:
+                        log.info("client certificate rotated, reconnecting")
+                        await client.aclose()
+                        client = httpx.AsyncClient(**tls_kwargs())
+                        stamp = current
+
                     await forwarder.flush(client, car.active_dtcs())
 
             try:
                 await asyncio.wait_for(_shutdown.wait(), timeout=period)
             except asyncio.TimeoutError:
                 pass
+    finally:
+        await client.aclose()
 
     log.info("stopped", extra={"vehicle_id": vehicle_id})
 

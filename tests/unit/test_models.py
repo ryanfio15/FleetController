@@ -15,7 +15,7 @@ from fc_common.obd import METRICS, in_range
 def batch(**overrides) -> dict:
     body = {
         "batch_id": "0123456789abcdef",
-        "vehicle_id": "sim-car-01",
+        "vehicle_id": "sim-car-0",
         "readings": [{"ts": "2026-10-27T18:04:01Z", "metric": "rpm", "value": 1840}],
         "dtcs": [],
     }
@@ -25,7 +25,7 @@ def batch(**overrides) -> dict:
 
 def test_valid_batch_parses():
     parsed = TelemetryBatch.model_validate(batch())
-    assert parsed.vehicle_id == "sim-car-01"
+    assert parsed.vehicle_id == "sim-car-0"
     assert parsed.readings[0].metric == "rpm"
 
 

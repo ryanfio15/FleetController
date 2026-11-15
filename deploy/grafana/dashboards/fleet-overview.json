@@ -23,8 +23,8 @@
         "includeAll": false,
         "sort": 1,
         "current": {
-          "text": ["sim-car-01", "sim-car-02", "sim-car-03"],
-          "value": ["sim-car-01", "sim-car-02", "sim-car-03"]
+          "text": ["sim-car-0", "sim-car-1", "sim-car-2"],
+          "value": ["sim-car-0", "sim-car-1", "sim-car-2"]
         }
       }
     ]
@@ -196,14 +196,14 @@
           }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "sim-car-01" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-02" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-03" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-04" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-05" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-06" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-07" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-08" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
+          { "matcher": { "id": "byName", "options": "sim-car-0" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-1" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-2" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-3" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-4" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-5" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-6" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-7" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
         ]
       },
       "options": {
@@ -254,14 +254,14 @@
           }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "sim-car-01" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-02" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-03" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-04" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-05" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-06" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-07" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-08" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
+          { "matcher": { "id": "byName", "options": "sim-car-0" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-1" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-2" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-3" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-4" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-5" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-6" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-7" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
         ]
       },
       "options": {
@@ -313,14 +313,14 @@
           }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "sim-car-01" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-02" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-03" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-04" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-05" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-06" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-07" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
-          { "matcher": { "id": "byName", "options": "sim-car-08" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
+          { "matcher": { "id": "byName", "options": "sim-car-0" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-1" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d95926" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-2" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-3" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-4" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#d55181" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-5" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-6" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } }] },
+          { "matcher": { "id": "byName", "options": "sim-car-7" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } }] }
         ]
       },
       "options": {

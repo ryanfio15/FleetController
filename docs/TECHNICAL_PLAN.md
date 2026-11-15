@@ -2,7 +2,9 @@
 
 **Author:** Ryan Fioravanti · CSC478
 **Source of truth:** `FleetController.pdf` (Chapters 1–2)
-**Status:** Planning. No code committed yet.
+**Status:** Stage 0 complete and tagged `stage-0` (§14). Stage 2 in progress — Envoy
+mTLS and the Kubernetes manifests are being built together, so the mTLS rehearsal
+under Compose is skipped rather than done twice.
 
 This document turns the outline into a buildable plan. The organizing principle is
 **local first**: every service runs on one laptop under Docker Compose before any
@@ -42,7 +44,7 @@ revisited in context later in the document.
 | G4 | **"Live" delivery.** `GET /vehicles/{id}/live` is a poll. | Poll at 2 s for v1. SSE is a stretch goal; it adds sticky-session concerns behind NodePort. |
 | G5 | **Alert delivery.** "Admin is alerted" — in-app only, or email/webhook? | In-app badge + `GET /api/v1/alerts` for v1. A webhook sink is a one-afternoon add later. |
 | G6 | **Retention.** Not specified, and the `state-1` PVC is 20Gi. | Mandatory, not optional — see the capacity math in §6.4. Compress at 24h, drop raw at 7d, keep 1m for 90d and 1h for 1y. |
-| G7 | **vehicle-sim is specified as a Deployment with "one cert each."** A Deployment's replicas are identical — they cannot each mount a different certificate, and they have no stable ordinal to derive an identity from. | Make vehicle-sim a **StatefulSet**. Stable ordinals give `sim-car-00..49` and let each pod mount its own cert via a per-ordinal volume. Surfaced while building Stage 0, where scaled Compose replicas hit exactly this problem (see §14). |
+| G7 | **vehicle-sim is specified as a Deployment with "one cert each."** A Deployment's replicas are identical — they cannot each mount a different certificate, and they have no stable ordinal to derive an identity from. | Make vehicle-sim a **StatefulSet**, giving stable ordinals `sim-car-0..49`. The certificate half needs more than that, because a StatefulSet also has one pod template — see §10 for the cert-manager-csi-driver resolution. Surfaced while building Stage 0, where scaled Compose replicas hit exactly this problem (see §14). |
 
 ---
 
@@ -163,7 +165,7 @@ Wire format — `POST /v1/telemetry`:
 ```json
 {
   "batch_id": "018f...",            // ULID, used as Nats-Msg-Id for dedup
-  "vehicle_id": "sim-car-01",       // MUST equal cert CN, else 403
+  "vehicle_id": "sim-car-0",       // MUST equal cert CN, else 403
   "readings": [
     { "ts": "2026-10-27T18:04:01.000Z", "metric": "coolant_temp", "value": 92.5 },
     { "ts": "2026-10-27T18:04:01.000Z", "metric": "rpm",          "value": 1840 }
@@ -312,7 +314,7 @@ what the outline specifies and it's the right call for a device fleet you contro
 (fail loudly rather than silently dropping fields). Its consequence lands on the sim
 — see §6.5.
 
-Subject-per-vehicle (`TELEMETRY.sim-car-01`) costs nothing now and is what makes the
+Subject-per-vehicle (`TELEMETRY.sim-car-0`) costs nothing now and is what makes the
 G1 fix in §6.3 possible later without a schema change.
 
 ### 6.2 NATS JetStream
@@ -370,7 +372,7 @@ Runs every 60 s, is idempotent via `UNIQUE (vehicle_id, started_at)`, and is
 completely indifferent to how many replicas exist.
 
 If you later want true streaming trips, the upgrade path is already in place:
-partition the pull consumer by subject (`TELEMETRY.sim-car-01`) so a vehicle's
+partition the pull consumer by subject (`TELEMETRY.sim-car-0`) so a vehicle's
 messages always reach one replica. Record that as an ADR; don't build it for v1.
 
 Alert thresholds, grounded in real values:
@@ -626,8 +628,32 @@ sims connect exactly as they will on FABRIC.
 The outline lists vehicle-sim as a Deployment scaling 3→50 with "one cert each."
 Those two requirements are incompatible: Deployment replicas are interchangeable,
 share one pod template, and have no stable ordinal, so there is no way to give pod
-*n* certificate *n*. Use a StatefulSet — the ordinal is the vehicle identity, and
-`volumeClaimTemplates` / per-ordinal Secret projection gives each pod its own cert.
+*n* certificate *n*. Use a StatefulSet — the ordinal is the vehicle identity.
+
+**A StatefulSet alone does not solve the certificate half of it**, which is worth
+stating because the obvious fix doesn't work: a StatefulSet still has exactly one
+pod template, so "mount Secret *n* into pod *n*" is not expressible either. The
+resolution is **cert-manager-csi-driver** — an ephemeral CSI volume that issues a
+certificate at mount time with the CN templated from pod metadata:
+
+```yaml
+csi.cert-manager.io/common-name: ${POD_NAME}
+csi.cert-manager.io/duration: 24h
+```
+
+For that to work the pod name must *be* the vehicle_id, which is why the IDs are
+unpadded `sim-car-0`..`sim-car-49` rather than `sim-car-00`. One invariant replaces
+all the translation:
+
+```
+pod name == hostname == certificate CN == vehicle_id
+```
+
+Identity then arrives as a plain `fieldRef: metadata.name`, no pod can read another
+vehicle's key, and renewal is the issuer's job rather than a script's. Migration
+`003_vehicle_ids_ordinal.sql` re-seeds the fleet accordingly; `002` is left intact
+because it is already recorded in `schema_migrations` everywhere.
+
 Everything else about the workload is unchanged.
 
 ### Stateful placement
