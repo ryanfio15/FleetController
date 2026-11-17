@@ -37,3 +37,11 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# midpoint presentation — local only, never committed
+midpointpres/
+
+# A filled-in ~/.fabric_rc: names a project GUID, a bastion username and the
+# paths of two private keys. fabric_rc.example documents every variable, so
+# there is nothing here worth committing. Copy it to ~/.fabric_rc instead.
+deploy/fabric/fabric_rc.txt

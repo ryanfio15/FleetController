@@ -47,6 +47,10 @@ CERT_MANAGER_VERSION="v1.16.2"
 KEDA_VERSION="2.16.1"
 METRICS_SERVER_VERSION="v0.7.2"
 INGRESS_NGINX_VERSION="controller-v1.12.0"
+# RKE2 does not ship a storage provisioner — local-path is a k3s component, not
+# an RKE2 one. Without it the cluster has no StorageClass at all and every PVC
+# in the fabric overlay stays Pending.
+LOCAL_PATH_VERSION="v0.0.31"
 
 KIND_CLUSTER="${KIND_CLUSTER:-fleet}"
 K8S_OVERLAY="${K8S_OVERLAY:-kind}"
@@ -193,8 +197,33 @@ SQL
             {"name":"http","port":80,"targetPort":"http","nodePort":30080,"protocol":"TCP"},
             {"name":"https","port":443,"targetPort":"https","nodePort":30444,"protocol":"TCP"}]}}'
     else
-        echo "==> RKE2 ships metrics-server, local-path and ingress-nginx; skipping"
-        echo "    (ingress-nginx is moved to NodePort 30080 by k8s-apply)"
+        # Skipping ingress-nginx here is only correct because the RKE2 server
+        # was told to deploy it. RKE2 v1.36 defaults to **traefik** and writes
+        # rke2-ingress-nginx.yaml as a "# disabled by configuration" stub, so
+        # out of the box the cluster has one IngressClass named `traefik` and
+        # none named `nginx`. deploy/fabric/fleetctl.py therefore sets
+        #   ingress-controller: [ingress-nginx]
+        # in the server config. If that ever stops happening, nothing here
+        # fails: the Grafana Ingress is created, no controller claims it
+        # because no class matches, and 30080 serves nothing with no error
+        # anywhere. Check `kubectl get ingressclass` before debugging Grafana.
+        #
+        # local-path is NOT an RKE2 component. It ships with k3s; RKE2 ships no
+        # storage provisioner at all, so `kubectl get sc` returns nothing and
+        # every PVC the overlay declares -- nats, timescaledb, pg-backup --
+        # sits Pending with "pod has unbound immediate PersistentVolumeClaims".
+        # The pods that depend on them then fail for reasons that look
+        # unrelated: ingest-api crash-loops on a NATS connection timeout.
+        echo "==> local-path-provisioner $LOCAL_PATH_VERSION (RKE2 ships no storage class)"
+        kubectl apply -f "https://raw.githubusercontent.com/rancher/local-path-provisioner/$LOCAL_PATH_VERSION/deploy/local-path-storage.yaml"
+        kubectl -n local-path-storage wait --for=condition=Available deploy/local-path-provisioner --timeout=180s
+
+        # metrics-server genuinely is an RKE2 component.
+        echo "==> RKE2 ships metrics-server and (when asked) ingress-nginx; skipping those"
+        echo "    (ingress-nginx needs ingress-controller: [ingress-nginx] on the"
+        echo "     server -- fleetctl.py sets it; verify with: kubectl get ingressclass)"
+        echo "    (it is moved to NodePort 30080 by fleetctl.py, not k8s-apply,"
+        echo "     which refuses the fabric overlay)"
     fi
     echo
     echo "Dependencies installed. Next: ./fc.sh k8s-build && ./fc.sh k8s-apply"

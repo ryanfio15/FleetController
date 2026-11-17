@@ -1,0 +1,24 @@
+# Keep LF in everything bash has to read.
+#
+# A CRLF shell script or env file usually appears to work on Windows, because
+# Git Bash's /etc/profile enables `igncr` and so strips the carriage returns for
+# you. A bash spawned by something else -- a Python subprocess, a hook, CI --
+# reads no profile, has igncr off, and then a line containing only "\r" is a
+# command: `./.env: line 3: $'\r': command not found`. Under `set -e` that
+# aborts the whole script, and the error names a file and line that look fine in
+# an editor.
+#
+# This is how .env.example and tools/certs/make-ca.sh ended up with CRLF while
+# `./fc.sh` still worked by hand and failed the moment fleetctl.py invoked it.
+*.sh      text eol=lf
+*.bash    text eol=lf
+*.sql     text eol=lf
+*.env     text eol=lf
+.env.example text eol=lf
+Makefile  text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+
+# Container images are built from these; the shell inside is Linux.
+Dockerfile text eol=lf
+*.dockerfile text eol=lf

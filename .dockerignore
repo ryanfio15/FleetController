@@ -1,0 +1,23 @@
+# Build contexts are the repository root, because every service Dockerfile
+# copies libs/fc_common in. That means everything here is sent to the daemon
+# unless excluded -- including virtualenvs and local-only directories, which no
+# image needs and which are large.
+#
+# The Dockerfiles only ever COPY libs/fc_common and services/<name>/, so
+# nothing below is reachable from a build.
+.git/
+.github/
+midpointpres/
+.venv/
+.venv-fabric/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+deploy/fabric/kubeconfig*
+docs/
+*.pdf
+.env

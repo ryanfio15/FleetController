@@ -1,9 +1,19 @@
-# RKE2 ships its own ingress-nginx, and not in the shape this project wants.
+# RKE2's packaged ingress-nginx, reshaped for this project.
 #
-# The bundled chart deploys a DaemonSet on hostPorts 80/443. The PDF's Services
-# table specifies NodePort 30080, reached through the FABRIC bastion tunnel, so
-# the packaged component needs reconfiguring rather than replacing: RKE2 watches
-# HelmChartConfig and re-renders its own chart with these values merged in.
+# Two separate things are needed on FABRIC, and only the second lives here:
+#
+# 1. RKE2 v1.36 deploys **traefik** by default and writes
+#    rke2-ingress-nginx.yaml as a "# disabled by configuration" stub, leaving
+#    `traefik` as the only IngressClass. This project's one Ingress asks for
+#    ingressClassName: nginx. So the server config carries
+#    `ingress-controller: [ingress-nginx]`, which fleetctl.py writes — without
+#    it nothing below matches anything in the cluster.
+#
+# 2. The chart then deploys a DaemonSet on hostPorts 80/443. The PDF's Services
+#    table specifies NodePort 30080, reached through the FABRIC bastion tunnel,
+#    so the packaged component is reconfigured rather than replaced: RKE2
+#    watches HelmChartConfig and re-renders its own chart with these values
+#    merged in.
 #
 # Applied to kube-system, not fleet, because that is where RKE2 manages its
 # packaged components. It is therefore kept out of the namespace-scoped part of
@@ -21,6 +31,11 @@ spec:
         type: NodePort
         nodePorts:
           http: 30080
+          # Pinned for the same reason as kind's: left unset the allocator
+          # picks a different port on every render, so `describe` and the
+          # write-up disagree. 30444 rather than 30443 because ingest owns
+          # that one, and a NodePort collision reads like a cluster fault.
+          https: 30444
       # hostPort and NodePort together would bind 80 on every node for no
       # reason and make the tunnel's target ambiguous.
       hostPort:

@@ -1,0 +1,35 @@
+# Copy to ~/.fabric_rc and fill in the two empty values. ~/.fabric_rc lives
+# outside the repository on purpose -- it names a token and two private keys.
+#
+# fleetctl.py sources this file itself (load_fabric_rc), because a plain
+# `python fleetctl.py` in a terminal does not pick it up the way a Jupyter
+# kernel does.
+#
+# That parser does literal assignment -- it does not run a shell -- so $HOME
+# and ~ are NOT expanded. Use absolute paths. Forward slashes are correct for
+# Python on Windows; on Linux/macOS write /home/you/... as usual.
+#
+# Leave a value you do not have yet EMPTY rather than writing a placeholder.
+# check_local() reports empty settings by name; a placeholder is non-empty, so
+# it passes that check and fails later inside fablib instead.
+
+# Portal -> Projects -> your project. A GUID.
+export FABRIC_PROJECT_ID=
+
+# Portal -> your account page. Portal username plus a numeric suffix,
+# e.g. ryanfio15_0000012345 -- the account you reach the bastion as.
+export FABRIC_BASTION_USERNAME=
+
+# Downloaded from the portal's token page, replaced wholesale when it expires.
+# A 401/403 from `check` means this is stale, not misconfigured.
+export FABRIC_TOKEN_LOCATION=C:/Users/you/.fabric/token.json
+
+# Two separate keypairs: one authenticates you to the bastion, the other is
+# injected into each VM's authorized_keys at slice creation. Generate with
+#   ssh-keygen -t rsa -b 3072 -N "" -f ~/.ssh/fabric_bastion_key
+#   ssh-keygen -t rsa -b 3072 -N "" -f ~/.ssh/fabric_sliver_key
+# and register the .pub halves in the portal. No passphrase: fleetctl.py drives
+# SSH non-interactively and never prompts for one.
+export FABRIC_BASTION_KEY_LOCATION=C:/Users/you/.ssh/fabric_bastion_key
+export FABRIC_SLICE_PRIVATE_KEY_FILE=C:/Users/you/.ssh/fabric_sliver_key
+export FABRIC_SLICE_PUBLIC_KEY_FILE=C:/Users/you/.ssh/fabric_sliver_key.pub
