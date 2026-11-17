@@ -25,7 +25,8 @@ cd ../.. && ./fc.sh k8s-up          # cluster, deps, build, load, apply
 ./fc.sh k8s-verify                   # the Stage 0 exit criterion, on-cluster
 ```
 
-Then open **http://localhost:30080/grafana/d/fc-fleet-overview**.
+Then open **http://localhost:30080/** for the fleet grid, or
+**http://localhost:30080/grafana/d/fc-fleet-overview** for the dashboard.
 
 ## What is here, and what is not
 
@@ -39,7 +40,9 @@ Then open **http://localhost:30080/grafana/d/fc-fleet-overview**.
 | vehicle-sim, 3→50 | yes | StatefulSet, per-pod certs |
 | migrations | yes | runs `db/migrate.sh` unmodified |
 | pg-backup | yes | nightly `pg_dump -Fc`, 7-day retention |
-| fleet-api, web-ui, keycloak | **no** | P3 — no code yet. `grafana.yaml` reserves their ingress paths |
+| fleet-api (read path) | yes | ClusterIP behind the Ingress at `/api`; scope enforced in SQL |
+| web-ui | yes | static nginx at `/`; three views, Grafana embedded |
+| keycloak, device provisioning | **no** | P3. `ingress.yaml` reserves `/auth`; `FLEET_ALLOW_DEV_IDENTITY` stands in |
 
 ## Things that will bite you
 
@@ -55,6 +58,32 @@ every shared file. Kustomize refuses to read above its own root without
 **The migrate Job must be deleted before re-applying.** A Job's spec is
 immutable; adding a migration moves the ConfigMap's name hash and the apply
 fails with "field is immutable". `k8s-apply` handles it.
+
+**The Ingress moved and was renamed, and the first apply after that fails.** It
+lived at the bottom of `grafana.yaml` as `ingress/grafana`; it is now
+`ingress.yaml` as `ingress/fleet`, routing three backends. `kubectl apply`
+prunes nothing, so on a cluster that ran the older manifests both exist at
+apply time — and ingress-nginx's admission webhook rejects the *whole apply*:
+
+```
+admission webhook "validate.nginx.ingress.kubernetes.io" denied the request:
+host "_" and path "/grafana" is already defined in ingress fleet/grafana
+```
+
+The error names no stale resource, and the apply it blocks is the one that
+would have replaced it. `./fc.sh k8s-apply` and `fleetctl.py` both
+`kubectl -n fleet delete ingress grafana --ignore-not-found` first.
+
+**`/api` must not get a `rewrite-target` annotation.** fleet-api serves its
+routes under `/api/v1` itself, so the prefix is not stripped anywhere. Adding
+the annotation that usually accompanies a path prefix would 404 every route.
+
+**web-ui's nginx does not proxy to fleet-api in the cluster.** ingress-nginx
+routes `/api`; a second proxy inside the pod would be a path around the
+NetworkPolicy. Under Compose there *is* no ingress controller, so
+`deploy/compose/web-ui-gateway.conf` bind-mounts a config that does proxy —
+that file is the single place the two environments differ in routing, and the
+cluster's `ingress.yaml` is the source of truth it follows.
 
 **ingest-api's probes are `exec`, not `httpGet`.** It binds `127.0.0.1` on
 purpose — that is what makes "reachable only via Envoy" structural rather than a
@@ -112,6 +141,11 @@ All of the following were run on kind (k8s v1.37) and passed. Beyond
 | The §6.3 no-duplicates claim, at 6 replicas | **0 duplicate groups** across 246,982 rows from 50 vehicles |
 | NetworkPolicy actually enforced | allowed path connects; denied paths time out |
 | Grafana through ingress-nginx :30080 | HTTP 200, `database: ok` |
+| Web UI and fleet-api on FABRIC :30080 | `/`, `/app.js`, `/api/v1/summary`, `/grafana/api/health` all 200 |
+| One Ingress, three backends | `ingress/fleet` only; `/`, `/api` and `/grafana` each reach their own Service |
+| The §6.6 rule, on the cluster | `owner` A → `sim-car-1` **200**, `sim-car-0` **404**, `admin` → **200** |
+| Series downsampling | 1800 points at 2 s buckets over a 1 h window, via `time_bucket` |
+| web-ui has no egress | `nc -z timescaledb 5432` from the UI pod **blocked**; from fleet-api, allowed |
 
 The commands:
 

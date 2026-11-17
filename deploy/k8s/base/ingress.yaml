@@ -1,0 +1,82 @@
+# The one way a browser gets in.  docs/TECHNICAL_PLAN.md §7.1, PDF Services
+#
+# Users reach this through the SSH bastion tunnel to NodePort 30080. No host is
+# set on purpose: a tunnelled request arrives with whatever Host header the
+# local port implies (`localhost:30080`), and pinning one here would reject it.
+#
+# This file used to live at the bottom of grafana.yaml, holding a single path
+# and a comment reserving the other two for P3. It routes three backends now,
+# so it is its own file — which also means "what is published to users" is one
+# `cat` rather than a hunt through a workload manifest.
+#
+# It is also renamed, grafana -> fleet. kubectl prunes nothing, so on a cluster
+# that ran the older manifests the old `ingress/grafana` still exists when this
+# one is applied — and ingress-nginx's admission webhook rejects the entire
+# apply rather than tolerating the overlapping path:
+#
+#   admission webhook "validate.nginx.ingress.kubernetes.io" denied the request:
+#   host "_" and path "/grafana" is already defined in ingress fleet/grafana
+#
+# Nothing in the error says "stale resource", and the apply that fails is the
+# one that would have fixed it. Both `./fc.sh k8s-apply` and fleetctl.py's
+# deploy_app therefore run this first:
+#
+#   kubectl -n fleet delete ingress grafana --ignore-not-found
+#
+# The device path is NOT here, and must never be. Telemetry arrives on NodePort
+# 30443 straight to Envoy, because anything that terminates TLS in front of it
+# strips the client certificate and the identity model collapses silently
+# (§10). Ingress is for people; 30443 is for cars.
+#
+# Path precedence is not declaration order. ingress-nginx emits one nginx
+# `location` per path and nginx matches the longest prefix, so `/api` and
+# `/grafana` win over `/` regardless of how this list is sorted. Worth knowing
+# before anyone "fixes" the ordering.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fleet
+  namespace: fleet
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          # fleet-api serves its routes under /api/v1 itself, so no rewrite is
+          # involved: the path the browser asks for is the path the service
+          # sees. A rewrite-target annotation here would be the easy mistake —
+          # it would strip the prefix and 404 every route.
+          #
+          # /metrics and /healthz sit outside /api on purpose and are therefore
+          # unreachable from outside the cluster through this rule.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: fleet-api
+                port:
+                  name: http
+
+          # Grafana, embedded by the vehicle detail view and linked from the
+          # header. GF_SERVER_SERVE_FROM_SUB_PATH in grafana.yaml is what makes
+          # this prefix work without rewriting; without it every static asset
+          # 404s and it looks like a broken deployment.
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  name: http
+
+          # The catch-all goes last by convention, though nginx's longest-prefix
+          # match means it would behave identically anywhere in this list.
+          #
+          # /auth joins these when Keycloak exists (P3).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-ui
+                port:
+                  name: http

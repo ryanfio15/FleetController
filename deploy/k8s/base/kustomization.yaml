@@ -5,9 +5,9 @@
 # that is a bug in this base — push the difference into an environment variable
 # instead (§4 rule 2).
 #
-# Not included yet, because the code does not exist: fleet-api, web-ui and
-# keycloak (P3). The PDF's architecture has them; nothing here references an
-# image that cannot be built. The Ingress in grafana.yaml reserves their paths.
+# Not included yet, because the code does not exist: keycloak, and the device
+# provisioning half of fleet-api (P3). The PDF's architecture has them; nothing
+# here references an image that cannot be built. ingress.yaml reserves /auth.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -22,7 +22,10 @@ resources:
   - ingest.yaml
   - processor.yaml
   - vehicle-sim.yaml
+  - fleet-api.yaml
+  - web-ui.yaml
   - grafana.yaml
+  - ingress.yaml
   - pg-backup.yaml
   # If the first bring-up on a new cluster fails in a way that looks like
   # nothing can talk to anything, comment this out to confirm whether it is the

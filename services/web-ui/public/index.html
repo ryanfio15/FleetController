@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FleetController</title>
+<!--
+  Everything this page needs is served from this container. No CDN, no bundler,
+  no framework — and that is a deployment constraint rather than a preference:
+  the namespace is default-deny egress (deploy/k8s/base/networkpolicy.yaml) and
+  the cluster is reached through an SSH tunnel, so a <script src="https://...">
+  would hang rather than fail, which looks like a broken app.
+
+  The plan calls this "not the interesting part of the project" (§6.7). It is
+  three views over fleet-api, with Grafana embedded for the deep time-series
+  work instead of reimplementing it.
+-->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>&#128663;</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/fleet">
+    <span class="brand-mark">FC</span>
+    <span>FleetController</span>
+  </a>
+
+  <nav id="nav">
+    <a href="#/fleet" data-view="fleet">Fleet</a>
+    <a href="#/alerts" data-view="alerts">Alerts <span id="nav-alert-count" class="pill hidden">0</span></a>
+    <a href="/grafana/d/fc-fleet-overview" target="_blank" rel="noopener">Grafana &#8599;</a>
+  </nav>
+
+  <div class="who">
+    <!--
+      The role switcher is the demo of the §6.6 authorisation rule, not a
+      convenience: flip to `owner` and half the fleet disappears and its URLs
+      start returning 404 rather than 403. It sends X-Fleet-User/X-Fleet-Role,
+      which is exactly as trustworthy as it looks — see fleet-api's
+      identity.py. Keycloak replaces it in P3 and this control goes away.
+    -->
+    <label for="role">viewing as</label>
+    <select id="role">
+      <option value="admin">admin &mdash; whole fleet</option>
+      <option value="operator">operator &mdash; whole fleet</option>
+      <option value="owner:11111111-1111-1111-1111-111111111111">owner A &mdash; odd cars</option>
+      <option value="owner:22222222-2222-2222-2222-222222222222">owner B &mdash; even cars</option>
+    </select>
+  </div>
+</header>
+
+<section class="summary" id="summary">
+  <div class="stat"><span class="stat-value" id="s-online">&mdash;</span><span class="stat-label">online</span></div>
+  <div class="stat"><span class="stat-value" id="s-alerts">&mdash;</span><span class="stat-label">open alerts</span></div>
+  <div class="stat"><span class="stat-value" id="s-distance">&mdash;</span><span class="stat-label">km today</span></div>
+  <div class="stat"><span class="stat-value" id="s-rate">&mdash;</span><span class="stat-label">readings / min</span></div>
+  <div class="spacer"></div>
+  <div class="stat-live"><span id="live-dot" class="dot"></span><span id="live-text">connecting</span></div>
+</section>
+
+<main id="view"></main>
+
+<footer class="foot">
+  <span>FleetController &middot; CSC478</span>
+  <span id="foot-note"></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -83,7 +83,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [ingest-api, stream-processor, vehicle-sim]
+        service: [ingest-api, stream-processor, vehicle-sim, fleet-api, web-ui]
     steps:
       - uses: actions/checkout@v4
 

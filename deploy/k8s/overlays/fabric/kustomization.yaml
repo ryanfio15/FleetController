@@ -24,6 +24,10 @@ images:
     newTag: dev
   - name: ghcr.io/ryanfio15/fleetcontroller/vehicle-sim
     newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/fleet-api
+    newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/web-ui
+    newTag: dev
 
 patches:
   # No user input needed — the tier labels come from the RKE2 bootstrap.

@@ -1,0 +1,106 @@
+# web-ui — static nginx.  docs/TECHNICAL_PLAN.md §6.7
+#
+# The simplest workload in the cluster, and it should stay that way: no state,
+# no secrets, no database, no egress. Its whole job is to hand the browser
+# three files that then talk to fleet-api over the same origin.
+#
+# It is an image rather than a ConfigMap of HTML, because a ConfigMap would
+# make the UI the one component that cannot be built, tagged or rolled back
+# like the others — and §4 rule 1's "one copy of every shared file" argument
+# does not apply: nothing else consumes these assets.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-ui
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: web-ui
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: web-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-ui
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: web-ui
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: web-ui
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: nginx
+          image: ghcr.io/ryanfio15/fleetcontroller/web-ui:dev
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            # nginx writes its pid and its proxy/fastcgi scratch space under
+            # these two paths and nowhere else, so mounting them as emptyDir is
+            # what makes the root filesystem read-only below. Without them the
+            # container exits immediately with "Read-only file system".
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+          securityContext:
+            # Affordable here and nowhere else in this stack: there is no
+            # application to install anything, so the image can be frozen.
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              # nginx's master binds the listener before dropping to the nginx
+              # user. 8080 is unprivileged, so this is not needed to bind — but
+              # the master also chowns the cache dirs, which is.
+              add: ["CHOWN", "SETUID", "SETGID"]
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-ui
+  namespace: fleet
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web-ui

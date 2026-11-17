@@ -130,26 +130,5 @@ spec:
           configMap:
             name: grafana-dashboard-providers
 
----
-# Users reach this through the SSH bastion tunnel to NodePort 30080 (PDF). No
-# host is set on purpose: a tunnelled request arrives with whatever Host header
-# the local port implies, and pinning one here would reject it.
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: grafana
-  namespace: fleet
-spec:
-  ingressClassName: nginx
-  rules:
-    - http:
-        paths:
-          # /, /api and /auth join this list when web-ui, fleet-api and
-          # Keycloak exist (P3). Grafana is the only one with a service today.
-          - path: /grafana
-            pathType: Prefix
-            backend:
-              service:
-                name: grafana
-                port:
-                  name: http
+# The Ingress that publishes this at /grafana lives in ingress.yaml, with the
+# other two routed backends.

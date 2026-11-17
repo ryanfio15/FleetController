@@ -170,6 +170,9 @@ spec:
               app.kubernetes.io/name: grafana
         - podSelector:
             matchLabels:
+              app.kubernetes.io/name: fleet-api
+        - podSelector:
+            matchLabels:
               app.kubernetes.io/name: migrate
         - podSelector:
             matchLabels:
@@ -213,6 +216,80 @@ spec:
               app.kubernetes.io/name: timescaledb
       ports:
         - { protocol: TCP, port: 5432 }
+
+# --------------------------------------------------------------- fleet-api --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fleet-api
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Same two namespaces as grafana: ingress-nginx lives in its own namespace
+    # under kind and in kube-system under RKE2, so both are named rather than
+    # making the overlays patch a policy.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: TCP, port: 8081 }
+    # Metrics, in-namespace only. /metrics shares the API's port, so this is
+    # also the rule that lets a neighbouring pod reach /api/v1 directly — the
+    # Ingress is a published route, not a boundary. The boundary is the role
+    # check, and it applies identically on both paths.
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 8081 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timescaledb
+      ports:
+        - { protocol: TCP, port: 5432 }
+
+# ------------------------------------------------------------------ web-ui --
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-ui
+  namespace: fleet
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web-ui
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: TCP, port: 8080 }
+  # No egress block at all, and that is the whole policy's point. This pod
+  # serves three static files; it has no reason to open a connection to
+  # anything, including fleet-api — the browser calls that, not nginx. The
+  # allow-dns policy above still applies, which is the only exception.
+  #
+  # It is also what makes the "no CDN" rule in index.html enforced rather than
+  # merely intended: a <script src="https://..."> fails in the browser, not
+  # here, but nothing this container itself could be talked into fetching
+  # leaves the pod.
+  egress: []
 
 # ------------------------------------------------- migrate and pg-backup --
 ---

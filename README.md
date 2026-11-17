@@ -29,8 +29,10 @@ Requires Docker Desktop. `make` is optional — `./fc.sh` is the real entrypoint
 ./fc.sh verify    # check the Stage 0 exit criterion
 ```
 
-Then open **http://localhost:3000/d/fc-fleet-overview** (anonymous access is on,
-so there is nothing to log into).
+Then open **http://localhost:8088/** — the fleet grid, vehicle detail and alerts
+inbox. Grafana is behind the same origin at
+**http://localhost:8088/grafana/d/fc-fleet-overview**; anonymous access is on, so
+there is nothing to log into in either.
 
 `./fc.sh verify` passes when readings are arriving and the pipeline is less than
 5 seconds behind:
@@ -85,6 +87,7 @@ Each of these was run against the stack, not just designed:
 | Buffer survives an outage | NATS killed 60 s: ingest 503s with `Retry-After`, sims buffer, 2,701 readings backfill on recovery |
 | Trips are derived correctly | gap-and-island SQL rollup, idempotent across re-runs |
 | Alerts fire on real thresholds | injected overheat → warn at 117 °C sustained 30 s |
+| An owner cannot see another owner's car | `owner` A on `sim-car-0` → **404**, not 403; `admin` → 200 |
 
 ## Repository layout
 
@@ -95,6 +98,8 @@ services/
   ingest-api/            FastAPI; owns the API contract and device identity
   stream-processor/      JetStream consumer → TimescaleDB; stateless by design
   vehicle-sim/           drive-cycle model + store-and-forward client
+  fleet-api/             FastAPI; the read path, and the only place scope is decided
+  web-ui/                static nginx; three views, no build step
 db/migrations/           numbered SQL, applied once by the migrate service
 deploy/compose/          the Stage 0 stack
 deploy/envoy/            mTLS proxy config — one copy, used by Compose and Kubernetes
@@ -132,6 +137,18 @@ the site's real addresses substituted in. Setup and caveats:
 [`deploy/fabric/README.md`](deploy/fabric/README.md).
 
 ## Design notes worth knowing before you change things
+
+**The web UI's "viewing as" switcher is a stub, and deliberately an obvious one.**
+Keycloak is P3. Until it exists, `fleet-api` takes the caller from
+`X-Fleet-User`/`X-Fleet-Role` headers, which anyone can set — the same documented
+gap as Grafana's anonymous access, and acceptable for the same reason: the
+cluster is reachable only through the SSH bastion tunnel. What is *not* stubbed
+is the authorisation rule underneath it. Scope lives in the SQL
+(`services/fleet-api/app/queries.py`), so an `owner` gets a 404 — never a 403,
+which would confirm the car exists — for a vehicle that is not theirs. Switching
+the dropdown to "owner A" and watching half the fleet disappear is that rule
+being demonstrated, not simulated. Setting `FLEET_ALLOW_DEV_IDENTITY=false`
+turns every request into a 401.
 
 **The vehicle ID comes from the certificate, never the request body.**
 `services/ingest-api/app/identity.py` is the only place allowed to decide who a

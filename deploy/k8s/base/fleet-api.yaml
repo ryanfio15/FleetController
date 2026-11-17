@@ -1,0 +1,126 @@
+# fleet-api — the user-facing read path.  docs/TECHNICAL_PLAN.md §6.6
+#
+# The counterpart to ingest.yaml, and almost its opposite. Ingest authenticates
+# a *machine* with a client certificate and binds loopback behind an Envoy
+# sidecar; this authenticates a *person* and sits behind ingress-nginx. So:
+#
+#   * no sidecar, so no loopback binding and no exec probes — plain httpGet.
+#   * no NodePort. The only way in is the Ingress, which is the only way the
+#     browser can reach it through the bastion tunnel anyway.
+#   * it talks to TimescaleDB, which ingest never does.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-api
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: fleet-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: fleet-api
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-api
+  namespace: fleet
+  labels:
+    app.kubernetes.io/name: fleet-api
+spec:
+  # Two, for the same reason ingest runs two: the Stage 3 exit test drains
+  # worker-1, and a one-replica API would take the UI down with it.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fleet-api
+    spec:
+      # The Service above is named `fleet-api`, so Kubernetes would otherwise
+      # inject FLEET_API_PORT=tcp://10.x.x.x:8081 — see the long note in
+      # ingest.yaml for what that does to a service whose settings prefix
+      # collides with it. This service's prefix is `FLEET_` precisely so the
+      # collision cannot reach it, and this line is the second lock.
+      enableServiceLinks: false
+      containers:
+        - name: fleet-api
+          image: ghcr.io/ryanfio15/fleetcontroller/fleet-api:dev
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: FLEET_HOST
+              value: 0.0.0.0
+            - name: FLEET_PORT
+              value: "8081"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_PASSWORD }
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: { name: fleet-db, key: POSTGRES_DB }
+            # Composed from the parts, exactly as processor.yaml does, so the
+            # password lives in one place. Kubernetes expands $(VAR) against
+            # earlier entries in this list.
+            #
+            # §6.6 wants this to be a *non-owner* role with RLS policies doing
+            # the scoping. It is the owning role today, so the scope predicate
+            # in queries.py is the only thing enforcing it — a gap recorded
+            # there rather than papered over here.
+            - name: FLEET_DB_DSN
+              value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@timescaledb:5432/$(POSTGRES_DB)
+            # True until Keycloak exists (P3). The UI's role switcher is this
+            # setting made visible; flipping it to "false" makes every request
+            # 401, which is what this deployment should look like the moment
+            # real tokens arrive and this path is left in by mistake.
+            - name: FLEET_ALLOW_DEV_IDENTITY
+              value: "true"
+            - name: FLEET_STALE_AFTER_SECONDS
+              value: "45"
+            - name: LOG_LEVEL
+              value: INFO
+          # httpGet, not exec: this one binds 0.0.0.0, so kubelet can reach it
+          # on the pod IP. readyz touches the database and healthz does not —
+          # a database blip should take the pod out of the Service, not restart
+          # a process that would recover on its own.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: fleet-api
+  namespace: fleet
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fleet-api

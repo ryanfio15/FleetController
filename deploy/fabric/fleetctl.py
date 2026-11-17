@@ -1016,6 +1016,14 @@ def deploy_app(edge_addr: str, node_cidr: str) -> None:
     # ConfigMap's name and the apply would fail with "field is immutable".
     kubectl(["-n", "fleet", "delete", "job", "migrate", "--ignore-not-found"])
 
+    # The Ingress moved out of grafana.yaml and was renamed grafana -> fleet
+    # when it grew the /api and / routes. kubectl prunes nothing, so on a
+    # cluster that ran the older manifests both exist for an instant -- and
+    # ingress-nginx's admission webhook rejects the *whole apply* with
+    #   host "_" and path "/grafana" is already defined in ingress fleet/grafana
+    # rather than merely tolerating the overlap. Deleting first is not tidying.
+    kubectl(["-n", "fleet", "delete", "ingress", "grafana", "--ignore-not-found"])
+
     manifests = render_overlay(edge_addr, node_cidr)
     kubectl(["apply", "-f", "-"], stdin=manifests)
     ok("manifests applied")

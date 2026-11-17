@@ -30,6 +30,10 @@ images:
     newTag: dev
   - name: ghcr.io/ryanfio15/fleetcontroller/vehicle-sim
     newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/fleet-api
+    newTag: dev
+  - name: ghcr.io/ryanfio15/fleetcontroller/web-ui
+    newTag: dev
 
 # Read from a gitignored file, exactly as the Compose stack reads .env — see
 # secret.env.example. Never a literal here: §7.3 says never commit a key,

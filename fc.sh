@@ -22,7 +22,7 @@
 #   ./fc.sh k8s-up        create the kind cluster, install deps, build, apply
 #   ./fc.sh k8s-cluster   create the kind cluster only
 #   ./fc.sh k8s-deps      install cert-manager, csi-driver, KEDA, metrics, ingress
-#   ./fc.sh k8s-build     build the three service images
+#   ./fc.sh k8s-build     build the service images
 #   ./fc.sh k8s-load      side-load the images into the kind nodes
 #   ./fc.sh k8s-apply     render the overlay and apply it
 #   ./fc.sh k8s-diff      show what an apply would change
@@ -57,7 +57,7 @@ K8S_OVERLAY="${K8S_OVERLAY:-kind}"
 K8S_NS="fleet"
 IMAGE_PREFIX="${IMAGE_PREFIX:-ghcr.io/ryanfio15/fleetcontroller}"
 IMAGE_TAG="${IMAGE_TAG:-dev}"
-SERVICES="ingest-api stream-processor vehicle-sim"
+SERVICES="ingest-api stream-processor vehicle-sim fleet-api web-ui"
 
 k() { kubectl -n "$K8S_NS" "$@"; }
 
@@ -86,7 +86,9 @@ case "$cmd" in
   up)
     dc up -d --build
     echo
-    echo "  Grafana    http://localhost:${GRAFANA_PORT:-3000}/d/fc-fleet-overview"
+    echo "  Web UI     http://localhost:${WEB_UI_PORT:-8088}/"
+    echo "  Fleet API  http://localhost:${FLEET_API_PORT:-8081}/api/v1/vehicles"
+    echo "  Grafana    http://localhost:${GRAFANA_PORT:-3000}/grafana/d/fc-fleet-overview"
     echo "  Ingest     http://localhost:8080/healthz"
     echo "  NATS       http://localhost:8222/jsz?streams=1"
     echo "  Postgres   localhost:5432  (user: $POSTGRES_USER)"
@@ -144,7 +146,8 @@ ORDER BY ts DESC LIMIT 6;
 SQL
     echo
     echo "PASS if readings_last_minute > 0 and seconds_behind < 5."
-    echo "Then open http://localhost:${GRAFANA_PORT:-3000}/d/fc-fleet-overview and see it on a panel."
+    echo "Then open http://localhost:${WEB_UI_PORT:-8088}/ for the fleet grid, or"
+    echo "http://localhost:${GRAFANA_PORT:-3000}/grafana/d/fc-fleet-overview to see it on a panel."
     ;;
 
   certs)
@@ -267,10 +270,19 @@ SQL
     # ConfigMap's name hash moves, the Job's volume reference changes, and the
     # apply fails with "field is immutable" — so the Job goes first.
     k delete job migrate --ignore-not-found
+    # The Ingress moved out of grafana.yaml and was renamed grafana -> fleet
+    # when it grew the /api and / routes. kubectl prunes nothing, so on a
+    # cluster that ran the older manifests both exist at apply time -- and
+    # ingress-nginx's admission webhook rejects the *whole apply* over the
+    # duplicated /grafana path rather than tolerating it. Not tidying.
+    k delete ingress grafana --ignore-not-found
     kz | kubectl apply -f -
     echo
     echo "Applied overlay '$K8S_OVERLAY'. Watch it come up with:"
     echo "  ./fc.sh k8s-status"
+    echo
+    echo "  Web UI     http://localhost:30080/"
+    echo "  Grafana    http://localhost:30080/grafana"
     ;;
 
   k8s-diff)
@@ -308,7 +320,8 @@ ORDER BY ts DESC LIMIT 6;
 SQL
     echo
     echo "PASS if readings_last_minute > 0 and seconds_behind < 5."
-    echo "Then open http://localhost:30080/grafana/d/fc-fleet-overview"
+    echo "Then open http://localhost:30080/            (the fleet grid)"
+    echo "     and  http://localhost:30080/grafana/d/fc-fleet-overview"
     ;;
 
   k8s-scale)

@@ -45,6 +45,36 @@ spec:
         tier: pipeline
 
 ---
+# The user-facing pair goes on the pipeline tier with Grafana. Not the edge:
+# the edge tier is the device boundary — ingest and nothing else — and putting
+# a browser-facing service there would blur the one placement decision in this
+# file that carries a security argument. Browsers arrive via the bastion tunnel
+# to cp-1 and ingress-nginx routes onward in-cluster, so neither of these needs
+# to be on any particular node to be reachable.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet-api
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: pipeline
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-ui
+  namespace: fleet
+spec:
+  template:
+    spec:
+      nodeSelector:
+        tier: pipeline
+
+---
 # The sims go on the pipeline tier, not the edge, specifically so their traffic
 # leaves the node and crosses the network to reach ingest. Co-locating them with
 # ingest would make the most interesting hop in the architecture a loopback
