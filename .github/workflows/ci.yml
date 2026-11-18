@@ -67,7 +67,13 @@ jobs:
         # transport_socket in the first draft of this file was found.
         run: |
           ./tools/certs/make-ca.sh 1
-          docker run --rm \
+          # -u 0 because make-ca.sh ends with `chmod 600 ./*.key` and the image
+          # runs as uid 101 (envoy), which then cannot read the mounted key.
+          # Envoy reports that as "Failed to load incomplete private key" rather
+          # than a permission error, so it reads like a malformed PEM. The key
+          # is a throwaway minted seconds earlier on an ephemeral runner; the
+          # alternative, loosening the chmod, would weaken it everywhere else.
+          docker run --rm -u 0 \
             -v "$PWD/deploy/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro" \
             -v "$PWD/tools/certs/out/ingest-server.crt:/etc/envoy/tls/tls.crt:ro" \
             -v "$PWD/tools/certs/out/ingest-server.key:/etc/envoy/tls/tls.key:ro" \
