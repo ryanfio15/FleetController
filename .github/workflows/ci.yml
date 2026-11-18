@@ -67,17 +67,29 @@ jobs:
         # transport_socket in the first draft of this file was found.
         run: |
           ./tools/certs/make-ca.sh 1
-          # -u 0 because make-ca.sh ends with `chmod 600 ./*.key` and the image
-          # runs as uid 101 (envoy), which then cannot read the mounted key.
-          # Envoy reports that as "Failed to load incomplete private key" rather
-          # than a permission error, so it reads like a malformed PEM. The key
-          # is a throwaway minted seconds earlier on an ephemeral runner; the
-          # alternative, loosening the chmod, would weaken it everywhere else.
-          docker run --rm -u 0 \
+
+          # Envoy reports an unreadable key as "Failed to load incomplete
+          # private key", which reads like a malformed PEM rather than the
+          # permission problem it is. make-ca.sh ends with `chmod 600 ./*.key`
+          # for the sake of developer machines, so hand the container its own
+          # readable copy in RUNNER_TEMP instead of relaxing that.
+          tls="$RUNNER_TEMP/envoy-tls"
+          mkdir -p "$tls"
+          install -m 644 tools/certs/out/ingest-server.crt "$tls/tls.crt"
+          install -m 644 tools/certs/out/ingest-server.key "$tls/tls.key"
+          install -m 644 tools/certs/out/ca.crt "$tls/ca.crt"
+
+          # Printed because the failure above is indistinguishable from a bad
+          # key by its message alone. openssl differs between the runner image
+          # and a developer laptop (ubuntu-latest moved to Ubuntu 26 in Oct
+          # 2026), so record what actually got generated.
+          openssl version
+          ls -l "$tls"
+          openssl pkey -in "$tls/tls.key" -noout -text | head -2
+
+          docker run --rm \
             -v "$PWD/deploy/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro" \
-            -v "$PWD/tools/certs/out/ingest-server.crt:/etc/envoy/tls/tls.crt:ro" \
-            -v "$PWD/tools/certs/out/ingest-server.key:/etc/envoy/tls/tls.key:ro" \
-            -v "$PWD/tools/certs/out/ca.crt:/etc/envoy/tls/ca.crt:ro" \
+            -v "$tls:/etc/envoy/tls:ro" \
             envoyproxy/envoy:v1.32-latest --mode validate -c /etc/envoy/envoy.yaml
 
   images:
